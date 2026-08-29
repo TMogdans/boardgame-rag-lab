@@ -1,4 +1,4 @@
-# Serving / Retrieval (venv 1) -- fuer rag.py
+# Serving / Retrieval / Vision (venv 1) -- fuer rag.py, render.py, vision_*.py
 #
 # torch bitte als CPU-Wheel installieren (kleiner, reicht fuer den Reranker):
 #   pip install --index-url https://download.pytorch.org/whl/cpu torch
@@ -6,5 +6,6 @@
 # (operator torchvision::nms), und der Text-Reranker braucht es nicht.
 numpy
 pypdf
+pymupdf
 requests
 sentence-transformers

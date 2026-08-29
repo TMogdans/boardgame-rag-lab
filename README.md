@@ -16,15 +16,19 @@ nicht als Produktivsystem.
 | Datei | Zweck |
 |---|---|
 | `rag.py` | Retrieval + optionaler Reranker + Golden-Set-Eval. Alle Stellschrauben per Umgebungsvariable. |
-| `ingest.py` | Bessere Ingestion: Docling (Layout/Tabellen) + faktentreue LLM-Verbalisierung -> `knowledge.jsonl`. |
+| `ingest.py` | Bessere Ingestion fuer Text/Tabellen: Docling (Layout) + faktentreue LLM-Verbalisierung -> `knowledge.jsonl`. |
+| `render.py` | Rendert PDF-Seiten als PNG (Vorstufe fuer Vision). |
+| `vision_test.py` | Schickt ein Bild + Frage an ein lokales Vision-Modell (schneller Check). |
+| `vision_ingest.py` | Verbalisiert eine Grafik-/Infografik-Seite per Vision und haengt jede Karte als Chunk an `knowledge.jsonl`. |
 | `golden_set.example.json` | Beispiel-Testset (Food Chain Magnate). Kopiere es nach `golden_set.json` und passe es an dein Spiel an. |
 
 ## Voraussetzungen
 
-- [Ollama](https://ollama.com/) laeuft lokal und hat die Modelle:
+- [Ollama](https://ollama.com/) laeuft lokal, mit den Modellen:
   ```
   ollama pull qwen3:14b     # Antwortmodell
   ollama pull bge-m3        # Embeddings (multilingual/deutsch)
+  ollama pull qwen2.5vl:7b  # Vision (fuer Grafik-/Infografik-Seiten)
   ```
 - Python 3.11+.
 
@@ -35,7 +39,7 @@ Ansprueche an `transformers`. In einer gemeinsamen venv bricht eines von beiden.
 Also trennen (was fuer eine spaetere Microservice-Architektur ohnehin passt).
 
 ```bash
-# venv 1: Serving / Retrieval
+# venv 1: Serving / Retrieval / Vision
 python3 -m venv .venv
 . .venv/bin/activate
 pip install --index-url https://download.pytorch.org/whl/cpu torch   # CPU reicht; KEIN torchvision
@@ -71,14 +75,16 @@ CHUNK_SIZE=400 python rag.py eval        # Haeppchengroesse (Zeichen)
 TOP_K=8 python rag.py eval               # wie viele Haeppchen in den Kontext
 RERANK=1 python rag.py eval              # Reranker an (over-retrieve -> Cross-Encoder)
 CANDIDATES=20 RERANK=1 python rag.py eval # Kandidatenfeld vor dem Reranking
-THINK=1 python rag.py eval               # Qwen3-Reasoning an (langsamer, gruendlicher)
 ```
 
-Beste Kombination in unseren Tests: `CHUNK_SIZE=400 RERANK=1` (Reranker mit
-maessigem Kandidatenfeld). Mehr ist nicht besser -- `TOP_K=8` und `CANDIDATES=40`
-haben die Ergebnisse jeweils verschlechtert.
+Beste Kombination in unseren Tests: `CHUNK_SIZE=400 RERANK=1`. Mehr ist nicht besser
+-- `TOP_K=8` und `CANDIDATES=40` haben die Ergebnisse jeweils verschlechtert.
 
-### Bessere Ingestion (Docling + Verbalisierung)
+### Ingestion nach Inhaltstyp
+
+Es gibt keine eine beste Methode -- es haengt davon ab, was auf der Seite steht.
+
+**Text & echte Tabellen** (Docling + Verbalisierung):
 
 ```bash
 . .venv-ingest/bin/activate
@@ -89,9 +95,15 @@ deactivate
 SOURCE=knowledge CHUNK_SIZE=400 RERANK=1 python rag.py eval
 ```
 
-Lohnt sich vor allem bei **echten Tabellen**. Bei reinem Fliesstext bringt es
-wenig; bei **Infografiken** hilft auch das nicht -- die brauchen Bildverarbeitung
-(Thema von Blog-Teil 3).
+**Grafiken & Infografiken** (Vision) -- das, woran reine Textextraktion scheitert:
+
+```bash
+. .venv/bin/activate
+python render.py pdfs/mein-spiel.pdf 6                    # Grafikseite -> seite_6.png
+python vision_test.py seite_6.png "Was steht auf Karte X?" # schneller Check
+python vision_ingest.py seite_6.png                       # jede Karte als Chunk -> knowledge.jsonl
+SOURCE=knowledge CHUNK_SIZE=400 RERANK=1 python rag.py eval
+```
 
 ## Was man dabei lernt
 
@@ -100,6 +112,7 @@ wenig; bei **Infografiken** hilft auch das nicht -- die brauchen Bildverarbeitun
   dazu, lieber "keine Angabe" zu sagen als zu raten.
 - "Mehr" (mehr Haeppchen, groesseres Kandidatenfeld) macht es oft schlechter.
 - Der groesste Hebel sitzt ganz vorne, beim Einlesen -- und die richtige Methode
-  haengt vom Inhaltstyp ab (Fliesstext / Tabelle / Grafik).
+  haengt vom Inhaltstyp ab: **Fliesstext -> rohe Extraktion reicht, echte Tabellen
+  -> Docling + Verbalisierung, Grafiken -> Vision.**
 - Miss die richtige Sache: ohne ein Golden Set, das alle Inhaltstypen abdeckt,
   zieht man leicht den falschen Schluss.
