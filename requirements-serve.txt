@@ -1,0 +1,10 @@
+# Serving / Retrieval (venv 1) -- fuer rag.py
+#
+# torch bitte als CPU-Wheel installieren (kleiner, reicht fuer den Reranker):
+#   pip install --index-url https://download.pytorch.org/whl/cpu torch
+# WICHTIG: KEIN torchvision installieren -- es bricht den Reranker-Import
+# (operator torchvision::nms), und der Text-Reranker braucht es nicht.
+numpy
+pypdf
+requests
+sentence-transformers

@@ -1,0 +1,85 @@
+{
+  "_kommentar": "Golden Set fuer den RAG-Test. 'seiten' = physische pypdf-Seiten (gedruckte Seite + 1 wegen unnummeriertem Deckblatt), Liste erlaubt mehrere gueltige Fundstellen. typ: fakt=steht klar drin, falle=hier lag Qwen in Teil 1 daneben, flavor=Deckblatt-Werbetext (keine Regel), leerstelle=steht nicht drin -> ehrliches 'keine Angabe' erwartet.",
+  "fragen": [
+    {
+      "id": 1,
+      "frage": "Was kostet eine Ware standardmaessig im Verkauf?",
+      "typ": "fakt",
+      "erwartet": "10 Dollar Stueckpreis",
+      "keywords": ["10"],
+      "seiten": [11]
+    },
+    {
+      "id": 2,
+      "frage": "Welchen Bonus bringt der CFO?",
+      "typ": "fakt",
+      "erwartet": "50 Prozent Bonus auf das in der Runde verdiente Bargeld",
+      "keywords": ["50", "%"],
+      "seiten": [11, 14]
+    },
+    {
+      "id": 3,
+      "frage": "In welcher Phase wird das Geld verdient?",
+      "typ": "fakt",
+      "erwartet": "Phase 4, Essenszeit",
+      "keywords": ["4", "Essenszeit"],
+      "seiten": [11]
+    },
+    {
+      "id": 4,
+      "frage": "Welche Reichweite hat der Truck Driver?",
+      "typ": "fakt",
+      "erwartet": "Reichweite 3",
+      "keywords": ["3"],
+      "seiten": [6, 10]
+    },
+    {
+      "id": 5,
+      "frage": "Wie lange darf eine Kampagne vom Campaign Manager maximal dauern?",
+      "typ": "falle",
+      "erwartet": "maximale Dauer 3",
+      "keywords": ["3"],
+      "seiten": [6]
+    },
+    {
+      "id": 6,
+      "frage": "Wie viel Geld bringt eine Waitress?",
+      "typ": "falle",
+      "erwartet": "3 Dollar, mit Meilenstein 'First waitress played' 5 Dollar",
+      "keywords": ["3"],
+      "seiten": [11, 14]
+    },
+    {
+      "id": 7,
+      "frage": "Gibt es die Spielregel 'Gleicher Mist, doppelter Preis'?",
+      "typ": "flavor",
+      "erwartet": "Nein - das ist Werbetext vom Deckblatt, keine Regel",
+      "keywords": ["keine Regel", "Deckblatt", "nein", "Werbetext", "keine Angabe"],
+      "seiten": [2]
+    },
+    {
+      "id": 8,
+      "frage": "Wie funktioniert der Solo-Modus von Food Chain Magnate?",
+      "typ": "leerstelle",
+      "erwartet": "Keine Angabe - das Regelheft nennt nur 2 bis 5 Spieler",
+      "keywords": ["keine Angabe", "nicht", "2 bis 5", "2-5"],
+      "seiten": []
+    },
+    {
+      "id": 9,
+      "frage": "Wie gross ist der Spielplan bei 4 Spielern?",
+      "typ": "tabelle",
+      "erwartet": "4x4 (aus der Aufbau-Tabelle)",
+      "keywords": ["4x4", "4 x 4", "4×4"],
+      "seiten": [5]
+    },
+    {
+      "id": 10,
+      "frage": "Welche Reklametafeln werden bei 2 Spielern aus dem Spiel entfernt?",
+      "typ": "tabelle",
+      "erwartet": "Reklametafeln #12, #15 und #16",
+      "keywords": ["12", "15", "16"],
+      "seiten": [5]
+    }
+  ]
+}

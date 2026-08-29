@@ -1,0 +1,13 @@
+# virtuelle Umgebungen
+.venv*/
+__pycache__/
+*.pyc
+
+# Urheberrechtlich geschuetzte Regelhefte und alles, was daraus abgeleitet wird,
+# gehoeren NICHT ins Repo. Bring dein eigenes PDF mit.
+pdfs/*.pdf
+*_docling.md
+knowledge.jsonl
+
+# dein angepasstes Golden Set (aus golden_set.example.json erstellt)
+golden_set.json

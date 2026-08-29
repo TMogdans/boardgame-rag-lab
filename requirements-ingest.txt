@@ -1,0 +1,6 @@
+# Ingestion (venv 2, SEPARAT!) -- fuer ingest.py
+#
+# Docling in einer eigenen venv halten. Zusammen mit sentence-transformers in
+# einer Umgebung kollidieren die transformers-Versionen (Dependency-Hell).
+docling
+requests
