@@ -143,20 +143,29 @@ def cmd_eval():
           f"  embed={EMBED_MODEL}  llm={LLM_MODEL}  think={THINK}")
     print(f"Index: {len(chunks)} Chunks aus {len(set(c['doc'] for c in chunks))} PDF(s)\n")
     seiten_treffer, kw_treffer, zaehlbar = 0, 0, 0
+    gefilterte_typen = {x for x in os.environ.get("DROP_TYPES", "").split(",") if x}
     for f in gs["fragen"]:
         hits = retrieve(f["frage"], chunks, embs)
         ans = answer(f["frage"], hits)
         seiten = [h["seite"] for h, _ in hits]
         erwartete = f.get("seiten") or []
-        seite_ok = any(s in seiten for s in erwartete) if erwartete else None
+        # Fragt eine Frage nach genau dem Inhaltstyp, den DROP_TYPES aus dem Index
+        # entfernt (z.B. typ="flavor" bei DROP_TYPES="flavor"), dann ist ihre erwartete
+        # Fundstelle per Konfiguration nicht mehr auffindbar. Das ist weder Treffer noch
+        # Fehlschlag des Retrievals -- sonst zaehlt der Filter als Retrieval-Fehler.
+        # Die Seite allein genuegt als Pruefung nicht: auf der Deckblattseite stehen
+        # neben dem Werbespruch weitere Chunks, die Seite bleibt also im Index.
+        pruefbar = bool(erwartete) and f.get("typ") not in gefilterte_typen
+        seite_ok = any(s in seiten for s in erwartete) if pruefbar else None
         kw = [k for k in f["keywords"] if k.lower() in ans.lower()]
-        if erwartete:
+        if pruefbar:
             zaehlbar += 1
             seiten_treffer += int(bool(seite_ok))
         kw_treffer += int(bool(kw))
         print(f"[{f['id']}] ({f['typ']}) {f['frage']}")
         print(f"    erwartet : {f['erwartet']}")
-        print(f"    Seite    : erwartet={erwartete} abgerufen={seiten} -> {seite_ok}")
+        grund = "" if pruefbar or not erwartete else "   (Typ per DROP_TYPES gefiltert -> nicht gewertet)"
+        print(f"    Seite    : erwartet={erwartete} abgerufen={seiten} -> {seite_ok}{grund}")
         print(f"    Keywords : {kw if kw else 'KEINE getroffen'}")
         print(f"    Antwort  : {ans[:280]}")
         print()
