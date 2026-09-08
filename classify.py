@@ -6,6 +6,10 @@ So laesst sich Flavor-/Meta-Rauschen beim Retrieval ausfiltern
 (rag.py: DROP_TYPES="flavor,meta"). Im Zweifel wird "regel" vergeben --
 lieber eine Regel behalten als faelschlich verwerfen.
 
+Neben dem Tag 'typ' wird die rohe Modellantwort als 'typ_antwort' mitgeschrieben.
+Erst damit ist am fertigen Lauf pruefbar, ob das MODELL einen Chunk als flavor
+bezeichnet hat oder die AUSWERTUNG ihn dazu gemacht hat.
+
 Die Modellantwort wird von auswerten() geprueft, nicht per Substring-Suche.
 Substring-Suche hat die Zusage der Zeile darueber ins Gegenteil verkehrt:
 "Das ist eine regel, kein flavor." wurde zu flavor, und bei
@@ -103,6 +107,12 @@ def auswerten(antwort):
 
 
 def classify(text):
+    """(kategorie, rohe Modellantwort) -- die Rohantwort wird mitgeschrieben.
+
+    Ohne sie ist am fertigen Lauf nicht mehr zu unterscheiden, ob das MODELL
+    einen Chunk als flavor bezeichnet hat oder die AUSWERTUNG ihn dazu gemacht
+    hat. Genau diese Frage liess sich beim letzten Messlauf nicht beantworten.
+    """
     r = requests.post(f"{OLLAMA}/api/chat", json={
         "model": LLM,
         "messages": [{"role": "system", "content": PROMPT},
@@ -110,7 +120,8 @@ def classify(text):
         "think": False, "stream": False,
     }, timeout=300)
     r.raise_for_status()
-    return auswerten(r.json()["message"]["content"])
+    roh = r.json()["message"]["content"]
+    return auswerten(roh), roh.strip()
 
 
 def main():
@@ -118,7 +129,7 @@ def main():
         entries = [json.loads(l) for l in f]
     counts = {}
     for e in entries:
-        e["typ"] = classify(e["text"])
+        e["typ"], e["typ_antwort"] = classify(e["text"])
         counts[e["typ"]] = counts.get(e["typ"], 0) + 1
 
     with open(KNOW, "w") as f:
@@ -126,10 +137,15 @@ def main():
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
 
     print("Klassifiziert:", counts)
+    gedeutet = [e for e in entries
+                if e["typ_antwort"].strip().lower() not in KATEGORIEN]
+    print(f"{len(gedeutet)} von {len(entries)} Modellantworten waren nicht einwortig "
+          f"-- dort hat die Auswertung gedeutet, nicht das Modell diktiert.")
     print("--- als flavor/meta markiert (zur Kontrolle) ---")
     for e in entries:
         if e["typ"] != "regel":
-            print(f"  [{e['typ']}] {e['text'][:90]}")
+            print(f"  [{e['typ']}] Modell sagte: {e['typ_antwort'][:70]!r}")
+            print(f"             {e['text'][:90]}")
 
 
 if __name__ == "__main__":
