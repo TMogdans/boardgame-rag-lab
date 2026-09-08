@@ -114,7 +114,8 @@ def classify(text):
 
 
 def main():
-    entries = [json.loads(l) for l in open(KNOW)]
+    with open(KNOW) as f:
+        entries = [json.loads(l) for l in f]
     counts = {}
     for e in entries:
         e["typ"] = classify(e["text"])
