@@ -102,14 +102,82 @@ python rag.py eval
 ### Stellschrauben (alles per env)
 
 ```bash
-CHUNK_SIZE=400 python rag.py eval        # Haeppchengroesse (Zeichen)
-TOP_K=8 python rag.py eval               # wie viele Haeppchen in den Kontext
-RERANK=1 python rag.py eval              # Reranker an (over-retrieve -> Cross-Encoder)
-CANDIDATES=20 RERANK=1 python rag.py eval # Kandidatenfeld vor dem Reranking
+CHUNK_SIZE=400 python rag.py eval         # Haeppchengroesse (Zeichen), Default 800
+CHUNK_OVERLAP=150 python rag.py eval      # Ueberlappung, Default 150 -- siehe Warnung unten
+TOP_K=8 python rag.py eval                # wie viele Haeppchen in den Kontext, Default 4
+RERANK=1 python rag.py eval               # Reranker an (over-retrieve -> Cross-Encoder)
+CANDIDATES=40 RERANK=1 python rag.py eval # Kandidatenfeld vor dem Reranking, Default 20
+SOURCE=knowledge python rag.py eval       # knowledge.jsonl statt roher PDF-Extraktion
+DROP_TYPES=flavor,meta python rag.py eval # Ballast aus dem Index werfen (nur mit SOURCE=knowledge)
+THINK=1 python rag.py eval                # Reasoning des LLM anschalten
 ```
 
-Beste Kombination in unseren Tests: `CHUNK_SIZE=400 RERANK=1`. Mehr ist nicht besser
--- `TOP_K=8` und `CANDIDATES=40` haben die Ergebnisse jeweils verschlechtert.
+`FRAGMENT_THRESHOLD=50` (in `auto_ingest.py`) entscheidet, ab wie vielen Text-Fragmenten
+eine Seite als Grafik gilt und zur Vision-Route geht.
+
+> **`CHUNK_OVERLAP` skaliert nicht mit `CHUNK_SIZE`.** Die Ueberlappung ist absolut, nicht
+> relativ. Wer `CHUNK_SIZE` von 800 auf 400 halbiert, aendert damit **vier** Dinge auf
+> einmal: Haeppchengroesse, relative Ueberlappung (18,8 % -> 37,5 %), Anzahl der Chunks
+> im Index und -- bei festem `TOP_K` -- die Menge Kontext, die beim Modell ankommt
+> (4 x 800 -> 4 x 400 Zeichen). Ein Ergebnisunterschied laesst sich deshalb **nicht**
+> allein der Haeppchengroesse zuschreiben. Wer die Groesse isoliert messen will, muss
+> `CHUNK_OVERLAP` mitskalieren und `TOP_K` gegenrechnen.
+
+> **Ergebniszahlen aus frueheren Laeufen sind nicht mehr vergleichbar.** Die Wertung in
+> `rag.py eval` wurde repariert (siehe "Was die Eval misst"): fruehere Quoten hatten einen
+> Nenner, den die Lauf-Konfiguration mitverschieben konnte. Alle Vergleiche muessen mit
+> diesem Stand neu erhoben werden.
+
+### Was die Eval misst -- und was nicht
+
+`python rag.py eval` erhebt **zwei** Dinge, und beide sind Regressionswarner, kein
+Korrektheitsmass:
+
+1. **Retrieval-Dreiteilung** `getroffen / verfehlt`, plus `Verweigerungsfragen` als eigene
+   Kategorie. Ob eine Frage in die Retrieval-Wertung eingeht, haengt allein an der Frage
+   selbst (Feld `erwartet_verweigerung` im Golden Set), **nie** an der Konfiguration des
+   Laufs. Der Nenner ist damit ueber alle `DROP_TYPES`-Varianten konstant -- eine
+   Verbesserung kann nicht mehr dadurch entstehen, dass Fragen aus der Wertung fallen.
+2. **Keyword-Treffer** in der Antwort, auf Wortgrenzen. Das ist ein grober
+   Aenderungsdetektor: das Skript kennt **keine** Kategorie "falsch" und kann
+   "keine einzige falsche Antwort" nicht ermitteln. Wer eine Korrektheitsaussage braucht,
+   liest die Antworten selbst gegen das Heft.
+
+Das Golden Set kennzeichnet Verweigerungsfragen ausdruecklich:
+
+```json
+{ "frage": "Gibt es die Spielregel 'Gleicher Mist, doppelter Preis'?",
+  "typ": "flavor", "erwartet_verweigerung": true, "seiten": [2] }
+```
+
+`typ` ist eine inhaltliche Kategorie und **keine** Wertungsanweisung -- eine Frage ohne
+`seiten` und ohne `erwartet_verweigerung` ist ein Konfigurationsfehler und bricht ab.
+
+**Die Eval bricht ab statt stillschweigend etwas anderes zu messen**, wenn:
+
+- `DROP_TYPES` einen Wert nennt, den `classify.py` nicht vergibt (`regel`/`flavor`/`meta`) --
+  insbesondere bei Verwechslung mit den Frage-Typen des Golden Sets (`fakt`, `falle`,
+  `leerstelle`, `tabelle`);
+- `DROP_TYPES` ohne `SOURCE=knowledge` gesetzt ist (der Filter koennte dort nicht wirken);
+- `DROP_TYPES` gesetzt ist, aber kein Chunk ein `typ`-Feld hat (`classify.py` fehlt);
+- ein `knowledge.jsonl`-Eintrag kein Feld `seite` hat (fruehere Faelle lieferten die
+  Chunk-ID als Seitenzahl aus -- eine erfundene Fundstelle ist schlimmer als ein Abbruch);
+- `CHUNK_SIZE <= CHUNK_OVERLAP` (waere eine Endlosschleife).
+
+> **Alte `knowledge.jsonl` neu erzeugen.** Dateien, die vor diesem Stand geschrieben wurden,
+> haben kein `seite`-Feld und fuehren zum Abbruch. Die Ingestion muss einmal neu laufen --
+> es genuegt nicht, nur `rag.py` zu aktualisieren.
+
+### Tests
+
+Die Auswertungslogik ist ohne Ollama, ohne Modelle und ohne PDF pruefbar:
+
+```bash
+python test_wertung.py       # Dreiteilung, DROP_TYPES-Entkopplung, Keywords, Guards
+python test_classify.py      # Klassifikator-Auswertung, 17 Antwortvarianten
+python test_ingest_seite.py  # 'seite'-Feld in ingest.py und vision_ingest.py
+python test_mutationen.py    # Mutationsprobe: verfaelscht die Fixes und prueft, dass Tests rot werden
+```
 
 ### Ingestion nach Inhaltstyp
 
@@ -125,6 +193,8 @@ deactivate
 
 . .venv/bin/activate
 python classify.py                          # optional: Ballast als flavor/meta taggen
+                                            # schreibt die rohe Modellantwort als 'typ_antwort' mit,
+                                            # damit eine Fehl-Einordnung nachvollziehbar bleibt
 SOURCE=knowledge CHUNK_SIZE=400 RERANK=1 DROP_TYPES=flavor,meta python rag.py eval
 ```
 
@@ -148,6 +218,8 @@ SOURCE=knowledge CHUNK_SIZE=400 RERANK=1 python rag.py eval
 python render.py pdfs/mein-spiel.pdf 6                    # Grafikseite -> seite_6.png
 python vision_test.py seite_6.png "Was steht auf Karte X?" # schneller Check
 python vision_ingest.py seite_6.png                       # jede Karte als Chunk -> knowledge.jsonl
+                                                          # Seite kommt aus dem Dateinamen (seite_N.png);
+                                                          # bei anderem Namen: SEITE=6 davorsetzen
 SOURCE=knowledge CHUNK_SIZE=400 RERANK=1 python rag.py eval
 ```
 
@@ -157,6 +229,9 @@ SOURCE=knowledge CHUNK_SIZE=400 RERANK=1 python rag.py eval
   falschen. Ein sauberer Grounding-Prompt und kleine Haeppchen bringen das Modell
   dazu, lieber "keine Angabe" zu sagen als zu raten.
 - "Mehr" (mehr Haeppchen, groesseres Kandidatenfeld) macht es oft schlechter.
+- Der Beobachtungspunkt darf nicht an derselben Konfiguration haengen, die er bewachen soll.
+  Genau das war hier eine Zeit lang der Fall: `DROP_TYPES` verkleinerte den Nenner der
+  Retrieval-Quote, ohne dass ein Retrieval besser wurde.
 - Der groesste Hebel sitzt ganz vorne, beim Einlesen -- und die richtige Methode
   haengt vom Inhaltstyp ab: **Fliesstext -> rohe Extraktion reicht, echte Tabellen
   -> Docling + Verbalisierung, Grafiken -> Vision.**
