@@ -18,7 +18,7 @@ import subprocess
 import sys
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-TESTS = ("test_classify.py", "test_ingest_seite.py")
+TESTS = ("test_classify.py", "test_ingest_seite.py", "test_wertung.py")
 
 # (Name, Datei, Suchmuster, Ersatz)
 MUTATIONEN = [
@@ -74,6 +74,27 @@ MUTATIONEN = [
      "    return out",
      '    alles = "\\n\\n".join("\\n\\n".join(seiten[p]) for p in sorted(seiten))\n'
      "    return [(1, b) for b in split_blocks(alles, target)]"),
+
+    ("M16 Wertung wieder von DROP_TYPES abhaengig machen",
+     "rag.py",
+     '    if frage.get("erwartet_verweigerung"):\n        return KAT_VERWEIGERUNG',
+     '    import os as _os\n'
+     '    if frage.get("typ") in {x for x in _os.environ.get("DROP_TYPES", "").split(",") if x}:\n'
+     '        return KAT_VERWEIGERUNG\n'
+     '    if frage.get("erwartet_verweigerung"):\n        return KAT_VERWEIGERUNG'),
+
+    ("M17 stiller seite-Fallback zurueck (Chunk-ID als Seitenzahl)",
+     "rag.py", 'def chunk_seite(c):', 'def chunk_seite(c):\n    return c.get("seite", c["id"])'),
+
+    ("M18 Chunk-Guard entfernt (Endlosschleife bei CHUNK_SIZE <= OVERLAP)",
+     "rag.py", "def pruefe_chunk_konfiguration(size=None, overlap=None):",
+     "def pruefe_chunk_konfiguration(size=None, overlap=None):\n    return\n\n\ndef _abgeschaltet(size=None, overlap=None):"),
+
+    ("M15 Flexionsendung bei Phrasen entfernt (Falsch-Negativ 'keine Angaben')",
+     "rag.py",
+     '    if rechts and len(kw.split()) > 1 and kw[-1:].isalpha():\n'
+     '        rechts = r"\\w{0,3}(?!\\w)"',
+     "    pass"),
 
     ("M10 vision_ingest.py laesst 'seite' wieder weg",
      "vision_ingest.py",

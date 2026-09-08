@@ -263,6 +263,16 @@ def _keyword_muster(kw):
     """
     links  = r"(?<!\w)" if kw[:1].isalnum() or kw[:1] == "_" else ""
     rechts = r"(?!\w)"  if kw[-1:].isalnum() or kw[-1:] == "_" else ""
+    # Deutsche Flexion: bei MEHRWORTIGEN Keywords darf das letzte Wort eine Endung
+    # tragen ("keine Angabe" trifft auch "keine Angaben"). Gemessen aufgefallen:
+    # das Modell verweigert mit "keine Angaben", das Golden Set nennt "keine Angabe",
+    # und die reine Wortgrenze erzeugte dadurch ein Falsch-NEGATIV.
+    # Bei EINWORTIGEN Keywords bleibt es strikt -- sonst traefe "nicht" wieder
+    # "nichts", genau das Falsch-Positiv, das die Wortgrenze beseitigen sollte.
+    # Endet das Keyword auf einer Ziffer, bleibt es ebenfalls strikt: Zahlen
+    # flektieren nicht, und "2 bis 5" darf nicht "2 bis 555" treffen.
+    if rechts and len(kw.split()) > 1 and kw[-1:].isalpha():
+        rechts = r"\w{0,3}(?!\w)"
     return links + re.escape(kw) + rechts
 
 
