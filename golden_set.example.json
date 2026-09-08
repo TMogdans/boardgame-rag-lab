@@ -1,12 +1,14 @@
 {
   "_kommentar": "Golden Set fuer den RAG-Test. 'seiten' = physische pypdf-Seiten (gedruckte Seite + 1 wegen unnummeriertem Deckblatt), Liste erlaubt mehrere gueltige Fundstellen. typ: fakt=steht klar drin, falle=hier lag Qwen in Teil 1 daneben, flavor=Deckblatt-Werbetext (keine Regel), leerstelle=steht nicht drin -> ehrliches 'keine Angabe' erwartet.",
+  "_kommentar_verweigerung": "'erwartet_verweigerung': true kennzeichnet Fragen, bei denen Verweigern die RICHTIGE Antwort ist. Nur dieses Feld steuert die Wertung -- 'typ' ist eine inhaltliche Kategorie, keine Wertungsanweisung. Solche Fragen bilden in rag.py eine eigene Kategorie und gehen nicht in die Retrieval-Quote ein; sie werden ihr aber auch nicht stillschweigend abgezogen. Keine Stellschraube des Laufs (DROP_TYPES, SOURCE, CHUNK_SIZE) darf einen Nenner verschieben.",
+  "_kommentar_keywords": "'keywords' sind ein REGRESSIONSWARNER, kein Korrektheitsmass: sie pruefen nur, ob ein erwartetes Stichwort woertlich (auf Wortgrenze) in der Antwort steht. Deshalb keine nackten Einzelziffern -- '3' oder '16' werden von beliebigem Fliesstext erfuellt (gemessen: eine faktenfreie Antwort traf 4 von 10). Stichwoerter tragen ihren Kontext mit ('Reichweite 3' statt '3'). Die Liste ist ODER-verknuepft; sie darf mehrere zulaessige Formulierungen nennen, aber keine, die Fliesstext zufaellig erfuellt.",
   "fragen": [
     {
       "id": 1,
       "frage": "Was kostet eine Ware standardmaessig im Verkauf?",
       "typ": "fakt",
       "erwartet": "10 Dollar Stueckpreis",
-      "keywords": ["10"],
+      "keywords": ["10 Dollar", "10 $", "10$", "$10", "Stueckpreis 10", "Stückpreis 10"],
       "seiten": [11]
     },
     {
@@ -14,7 +16,7 @@
       "frage": "Welchen Bonus bringt der CFO?",
       "typ": "fakt",
       "erwartet": "50 Prozent Bonus auf das in der Runde verdiente Bargeld",
-      "keywords": ["50", "%"],
+      "keywords": ["50 %", "50%", "50 Prozent"],
       "seiten": [11, 14]
     },
     {
@@ -22,7 +24,7 @@
       "frage": "In welcher Phase wird das Geld verdient?",
       "typ": "fakt",
       "erwartet": "Phase 4, Essenszeit",
-      "keywords": ["4", "Essenszeit"],
+      "keywords": ["Phase 4", "Essenszeit"],
       "seiten": [11]
     },
     {
@@ -30,7 +32,7 @@
       "frage": "Welche Reichweite hat der Truck Driver?",
       "typ": "fakt",
       "erwartet": "Reichweite 3",
-      "keywords": ["3"],
+      "keywords": ["Reichweite 3", "Reichweite von 3", "Reichweite: 3"],
       "seiten": [6, 10]
     },
     {
@@ -38,7 +40,7 @@
       "frage": "Wie lange darf eine Kampagne vom Campaign Manager maximal dauern?",
       "typ": "falle",
       "erwartet": "maximale Dauer 3",
-      "keywords": ["3"],
+      "keywords": ["Dauer 3", "Dauer von 3", "Dauer: 3", "maximal 3", "hoechstens 3", "höchstens 3"],
       "seiten": [6]
     },
     {
@@ -46,7 +48,7 @@
       "frage": "Wie viel Geld bringt eine Waitress?",
       "typ": "falle",
       "erwartet": "3 Dollar, mit Meilenstein 'First waitress played' 5 Dollar",
-      "keywords": ["3"],
+      "keywords": ["3 Dollar", "3 $", "3$", "$3"],
       "seiten": [11, 14]
     },
     {
@@ -54,7 +56,8 @@
       "frage": "Gibt es die Spielregel 'Gleicher Mist, doppelter Preis'?",
       "typ": "flavor",
       "erwartet": "Nein - das ist Werbetext vom Deckblatt, keine Regel",
-      "keywords": ["keine Regel", "Deckblatt", "nein", "Werbetext", "keine Angabe"],
+      "erwartet_verweigerung": true,
+      "keywords": ["keine Regel", "Deckblatt", "nein", "Werbetext", "keine Angabe", "keine Angaben"],
       "seiten": [2]
     },
     {
@@ -62,7 +65,8 @@
       "frage": "Wie funktioniert der Solo-Modus von Food Chain Magnate?",
       "typ": "leerstelle",
       "erwartet": "Keine Angabe - das Regelheft nennt nur 2 bis 5 Spieler",
-      "keywords": ["keine Angabe", "nicht", "2 bis 5", "2-5"],
+      "erwartet_verweigerung": true,
+      "keywords": ["keine Angabe", "keine Angaben", "2 bis 5", "2-5"],
       "seiten": []
     },
     {
@@ -78,7 +82,7 @@
       "frage": "Welche Reklametafeln werden bei 2 Spielern aus dem Spiel entfernt?",
       "typ": "tabelle",
       "erwartet": "Reklametafeln #12, #15 und #16",
-      "keywords": ["12", "15", "16"],
+      "keywords": ["#12", "#15", "#16", "Reklametafeln 12", "12, 15 und 16", "12, 15, 16"],
       "seiten": [5]
     }
   ]
