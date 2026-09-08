@@ -12,7 +12,7 @@ fasse_zusammen, zerteile, chunk_seite, lies_drop_types, baue_knowledge_chunks.
 Kern des Ganzen ist test_drop_types_veraendert_die_wertung_nicht: die Gegenmessung
 gegen die dokumentierte Tabelle aus der Befundliste (A1).
 """
-import json, os, re, sys, unittest
+import contextlib, io, json, os, re, sys, unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -377,6 +377,49 @@ class TestChunkGuard(unittest.TestCase):
              mock.patch.object(rag, "CHUNK_OVERLAP", 150):
             with self.assertRaises(rag.KonfigFehler):
                 rag.baue_knowledge_chunks([{"id": "k1", "seite": 2, "text": "A" * 400}], set())
+
+
+# ---------------------------------------------------------------------------
+# Der echte Durchlauf: cmd_eval verdrahtet die Wertung -- mit gestopften
+# Modellaufrufen. Ohne diesen Test bliebe eine Mutation gruen, die cmd_eval an
+# der reparierten Logik vorbei wieder auf die alte Formel legt.
+# ---------------------------------------------------------------------------
+class TestCmdEval(unittest.TestCase):
+    def lauf(self, drop_types="", quelle="knowledge"):
+        chunks = [{"doc": "knowledge", "seite": 1, "text": "x"}]
+        nach_id = {f["frage"]: f["id"] for f in FRAGEN}
+
+        def fake_retrieve(frage, _chunks, _embs, k=None):
+            return [({"doc": "knowledge", "seite": s, "text": "x"}, 0.5)
+                    for s in ABGERUFEN[nach_id[frage]]]
+
+        puffer = io.StringIO()
+        with mock.patch.object(rag, "build_index", lambda: (chunks, None)), \
+             mock.patch.object(rag, "retrieve", fake_retrieve), \
+             mock.patch.object(rag, "answer", lambda frage, hits: FAKTENFREI), \
+             mock.patch.dict(os.environ, {"DROP_TYPES": drop_types, "SOURCE": quelle}), \
+             contextlib.redirect_stdout(puffer):
+            rag.cmd_eval(os.path.join(BASE, "golden_set.example.json"))
+        return puffer.getvalue()
+
+    def test_durchlauf_meldet_die_dreiteilung(self):
+        text = self.lauf()
+        self.assertIn("getroffen : 5/8", text)
+        self.assertIn("verfehlt  : 3/8", text)
+        self.assertIn("Verweigerungsfragen: 2/10", text)
+        self.assertIn("Keyword-Regressionswarner: 1/10", text)
+        self.assertIn("Verweigerungsfrage -- Retrieval-Quote nicht anwendbar", text)
+
+    def test_durchlauf_ist_unabhaengig_von_drop_types(self):
+        referenz = None
+        for variante in DROP_VARIANTEN:
+            for quelle in ("knowledge", "pdf"):
+                with self.subTest(drop_types=variante, source=quelle):
+                    zeilen = [z for z in self.lauf(variante, quelle).splitlines()
+                              if "drop_types=" not in z and "source=" not in z]
+                    if referenz is None:
+                        referenz = zeilen
+                    self.assertEqual(zeilen, referenz)
 
 
 if __name__ == "__main__":

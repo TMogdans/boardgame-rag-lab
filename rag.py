@@ -366,8 +366,11 @@ def cmd_ask(query):
     print("\nAbgerufen:", [(h["doc"], f"S.{h['seite']}", round(s, 3)) for h, s in hits])
 
 
-def cmd_eval():
-    gs = json.load(open(os.path.join(os.path.dirname(__file__), "golden_set.json")))
+def cmd_eval(golden_set_pfad=None):
+    # Pfad als Parameter, damit der komplette Wertungsdurchlauf mit einem
+    # Beispiel-Golden-Set testbar ist (siehe test_wertung.py, TestCmdEval).
+    gs = json.load(open(golden_set_pfad
+                        or os.path.join(os.path.dirname(__file__), "golden_set.json")))
     chunks, embs = build_index()
     print(f"Config: chunk={CHUNK_SIZE}/{CHUNK_OVERLAP}  top_k={TOP_K}  rerank={RERANK}"
           f"{'(' + RERANK_MODEL + ', cand=' + str(CANDIDATES) + ')' if RERANK else ''}"
