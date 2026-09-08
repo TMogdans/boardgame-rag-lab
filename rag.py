@@ -53,7 +53,7 @@ def load_chunks():
                 t = c["text"]
                 start = 0
                 while start < len(t):
-                    chunks.append({"doc": "knowledge", "seite": c["id"], "text": t[start:start + CHUNK_SIZE]})
+                    chunks.append({"doc": "knowledge", "seite": c.get("seite", c["id"]), "text": t[start:start + CHUNK_SIZE]})
                     start += CHUNK_SIZE - CHUNK_OVERLAP
         return chunks
     chunks = []
