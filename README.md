@@ -128,6 +128,30 @@ eine Seite als Grafik gilt und zur Vision-Route geht.
 > Nenner, den die Lauf-Konfiguration mitverschieben konnte. Alle Vergleiche muessen mit
 > diesem Stand neu erhoben werden.
 
+Gemessen mit dem reparierten Stand, deutsches FCM-Regelheft (15 Seiten), Golden Set mit
+10 Fragen, `auto_ingest.py` + `classify.py`, `CHUNK_SIZE=400`, `top_k=4`, qwen3:14b:
+
+| Konfiguration | Index | getroffen | Precision@4 | MRR |
+|---|---|---|---|---|
+| ohne Reranker, ohne `DROP_TYPES` | 286 Chunks | 7/8 | **0,562** | **0,792** |
+| ohne Reranker, `DROP_TYPES=flavor,meta` | 256 Chunks | 7/8 | 0,562 | 0,792 |
+| mit Reranker, ohne `DROP_TYPES` | 286 Chunks | 7/8 | 0,531 | 0,729 |
+| mit Reranker, `DROP_TYPES=flavor,meta` | 256 Chunks | 7/8 | 0,531 | 0,729 |
+
+Zwei Dinge, die dabei herauskommen und die vorherige Aussage "beste Kombination
+`CHUNK_SIZE=400 RERANK=1`" nicht stuetzen:
+
+1. **Der Typ-Filter aendert nichts.** Er entfernt 30 Chunks aus dem Index -- und keine
+   einzige Wertung, auch nicht Precision oder MRR. Die 30 Chunks kamen nie in die top_4.
+   Frueher sah das nach einer Verbesserung aus, weil der Filter den *Nenner* senkte.
+2. **Der Reranker verschlechtert hier leicht** (Precision@4 0,562 -> 0,531, MRR 0,792 ->
+   0,729). Er veraendert die Reihenfolge sichtbar, aber nicht zum Besseren. Bei zehn Fragen
+   ist das kein Urteil ueber Cross-Encoder, sondern ueber diesen Aufbau.
+
+Und ein Hinweis auf die Grenze der Messlatte selbst: "erwartete Seite unter top_k" ist
+binaer und hat in allen vier Konfigurationen 7/8 gemeldet. Erst Precision@4 und MRR zeigen
+ueberhaupt einen Unterschied. Wer nur die Quote ansieht, sieht keine Stellschraube wirken.
+
 ### Was die Eval misst -- und was nicht
 
 `python rag.py eval` erhebt **zwei** Dinge, und beide sind Regressionswarner, kein

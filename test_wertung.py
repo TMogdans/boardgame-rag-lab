@@ -309,6 +309,29 @@ class TestKeywords(unittest.TestCase):
         self.assertEqual(leer, [], f"plausible richtige Antwort trifft kein Keyword: {leer}")
         self.assertEqual(z["kw_treffer"], 10)
 
+    def test_flexionsendung_bei_phrasen(self):
+        """Am echten Messlauf aufgefallen: das Modell verweigert mit 'keine Angaben',
+        das Golden Set nennt 'keine Angabe'. Die reine Wortgrenze erzeugte dadurch
+        ein Falsch-NEGATIV -- die Verweigerung wurde nicht als solche erkannt (0/2)."""
+        # Phrase: Flexionsendung am letzten Wort erlaubt
+        self.assertTrue(rag.keyword_treffer(["keine Angabe"], "Dazu enthaelt das Dokument keine Angaben."))
+        self.assertTrue(rag.keyword_treffer(["keine Angabe"], "Dazu gibt es keine Angabe."))
+        # Einwortig bleibt strikt -- sonst ist das Falsch-Positiv "nichts" zurueck
+        self.assertFalse(rag.keyword_treffer(["nicht"], "Dazu kann ich nichts Genaues sagen."))
+        self.assertTrue(rag.keyword_treffer(["nicht"], "Das steht nicht im Dokument."))
+        # Endet die Phrase auf einer Ziffer, bleibt es strikt: Zahlen flektieren nicht
+        self.assertTrue(rag.keyword_treffer(["2 bis 5"], "Das Spiel ist fuer 2 bis 5 Spieler."))
+        self.assertFalse(rag.keyword_treffer(["2 bis 5"], "Das Spiel ist fuer 2 bis 555 Spieler."))
+
+    def test_verweigerung_mit_flektierter_form_wird_erkannt(self):
+        """Der Fall aus dem Messlauf, Ende zu Ende: beide Verweigerungsfragen
+        wurden korrekt verweigert, gezaehlt wurden aber 0/2."""
+        antworten = {7: "Dazu enthaelt das Dokument keine Angaben.",
+                     8: "Dazu enthaelt das Dokument keine Angaben."}
+        _, z = werte_lauf_aus(antworten)
+        self.assertEqual(z["verweigerungsfragen"], 2)
+        self.assertEqual(z["verweigerung_signal"], 2, "flektierte Verweigerung nicht erkannt")
+
     def test_verweigerungssignal_wird_getrennt_gezaehlt(self):
         antworten = {7: "Nein, das ist Werbetext.", 8: "Es gibt einen Solo-Modus mit 7 Karten."}
         _, z = werte_lauf_aus(antworten)
