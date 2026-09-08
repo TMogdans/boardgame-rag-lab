@@ -46,10 +46,13 @@ Regeln:
 def load_chunks():
     # Verbalisierte Wissensbasis (Docling -> Qwen) statt roher pypdf-Extraktion?
     if os.environ.get("SOURCE") == "knowledge":
+        drop = {x for x in os.environ.get("DROP_TYPES", "").split(",") if x}
         chunks = []
         with open(os.path.join(os.path.dirname(__file__), "knowledge.jsonl")) as kf:
             for line in kf:
                 c = json.loads(line)
+                if c.get("typ") in drop:   # z.B. DROP_TYPES="flavor,meta"
+                    continue
                 t = c["text"]
                 start = 0
                 while start < len(t):
