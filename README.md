@@ -204,6 +204,7 @@ python test_classify.py      # Klassifikator-Auswertung, 17 Antwortvarianten
 python test_ingest_seite.py  # 'seite'-Feld in ingest.py und vision_ingest.py
 python test_mutationen.py    # Mutationsprobe: verfaelscht die Fixes und prueft, dass Tests rot werden
 python test_openwebui_pipe.py  # Pipe: gleiche Chunks, gleicher Prompt wie die CLI (braucht pydantic + httpx)
+# test_mutationen.py faehrt auch die Pipe-Mutationen (P1-P18)
 ```
 
 ### Ingestion nach Inhaltstyp
@@ -289,6 +290,9 @@ Die Stellschrauben (`CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOP_K`, `DROP_TYPES`, `LLM_M
 unter Admin → Funktionen. Die Defaults sind die oben gemessene Konfiguration:
 `CHUNK_SIZE=400`, `CHUNK_OVERLAP=150`, `TOP_K=4`, `DROP_TYPES=flavor,meta`. Der passende
 Vergleichslauf: `SOURCE=knowledge CHUNK_SIZE=400 DROP_TYPES=flavor,meta python rag.py eval`.
+`rag.py` liest `knowledge.jsonl` und `golden_set.json` neben sich selbst -- im Clone also
+dieselbe Datei verlinken, die der Container gemountet bekommt
+(`ln -s ~/rag-lab/knowledge.jsonl .`), sonst vergleicht der Lauf gegen eine andere Basis.
 
 `knowledge.jsonl` ist als einzelne Datei gemountet. Ein Bind-Mount haengt an der Inode:
 wird die Datei auf dem Host per Rename ersetzt (`mv`, rsync ohne `--inplace`), sieht der

@@ -144,7 +144,10 @@ class TestAequivalenzZurCli(PipeTestBasis):
         # Open WebUI benutzt CHUNK_SIZE/CHUNK_OVERLAP selbst -- das darf nicht durchschlagen.
         with mock.patch.dict(os.environ, {"CHUNK_SIZE": "1000", "CHUNK_OVERLAP": "100", "RERANK": "1"}):
             self.pipe.valves.CHUNK_SIZE, self.pipe.valves.CHUNK_OVERLAP = 30, 10
-            self.frage("Geld")
+            text = self.frage("Geld")
+        # RERANK=1 in der Umgebung darf den Reranker (torch fehlt) nicht einschalten
+        self.assertNotIn("Fehler", text)
+        self.assertIn("*Abgerufen:", text)
         n_index = len(self.index_bauten()[0].kwargs["json"]["input"])
         erwartet = sum(len(rag.zerteile(c["text"], 30, 10)) for c in WISSEN if c["typ"] != "flavor")
         self.assertEqual(n_index, erwartet)
@@ -179,6 +182,48 @@ class TestValvesUndCache(PipeTestBasis):
             setattr(self.pipe.valves, feld, wert)
             self.frage("Geld")
             self.assertEqual(len(self.index_bauten()), vorher + 1, feld)
+
+    def test_neubau_nutzt_die_neuen_werte(self):
+        # Nicht nur zaehlen, dass neu gebaut wird -- sondern womit.
+        self.frage("Geld")
+        v = self.pipe.valves
+        v.EMBED_MODEL, v.OLLAMA_URL, v.CHUNK_OVERLAP, v.CHUNK_SIZE = "neu-embed", "http://neu", 5, 20
+        self.frage("Geld")
+        bau = self.index_bauten()[-1]
+        self.assertEqual(bau.args[0], "http://neu/api/embed")
+        self.assertEqual(bau.kwargs["json"]["model"], "neu-embed")
+        erwartet = sum(len(rag.zerteile(c["text"], 20, 5)) for c in WISSEN if c["typ"] != "flavor")
+        self.assertEqual(len(bau.kwargs["json"]["input"]), erwartet)
+
+    def test_parallele_anfragen_mit_wechselnden_valves_vermischen_keine_modelle(self):
+        # Modell "m2" liefert Vektoren einer anderen Dimension. Wuerde eine Frage mit
+        # dem Modell der Nachbaranfrage eingebettet, scheitert das Skalarprodukt.
+        def post(url, json=None, timeout=None):
+            if url.endswith("/api/embed"):
+                extra = [1.0] if json["model"] == "m2" else []
+                return FakeAntwort({"embeddings": [fake_vektor(t) + extra for t in json["input"]]})
+            return fake_post(url, json=json, timeout=timeout)
+        self.post_mock.side_effect = post
+        self.frage("Geld")  # rag.py laden
+        original = self.pipe._rag.retrieve
+
+        def zoegernd(*a, **kw):
+            time.sleep(0.005)  # Fenster, in dem eine Nachbaranfrage die Globalen umsetzen koennte
+            return original(*a, **kw)
+        self.pipe._rag.retrieve = zoegernd
+        valves = [self.pipe.valves.model_copy(update={"EMBED_MODEL": m}) for m in ("m1", "m2")]
+        fehler = []
+
+        def lauf(v):
+            for _ in range(10):
+                try:
+                    self.pipe._suche("Geld", v)
+                except Exception as e:
+                    fehler.append(repr(e))
+        ts = [threading.Thread(target=lauf, args=(v,)) for v in valves]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        self.assertEqual(fehler, [])
 
     def test_kein_neubau_bei_antwort_stellschrauben(self):
         self.frage("Geld")
@@ -254,6 +299,28 @@ class TestVerlaufUndTask(PipeTestBasis):
         self.assertEqual(self.embed_aufrufe(), [])
         self.assertEqual(self.nachrichten(), [{"role": "system", "content": "Du erzeugst Titel."},
                                               {"role": "user", "content": "Erzeuge Titel"}])
+
+    def test_jede_task_art_ohne_retrieval(self):
+        for task in ("title_generation", "tags_generation", "follow_up_generation"):
+            self.frage("Erzeuge etwas", task=task)
+        self.assertEqual(self.embed_aufrufe(), [])
+
+    def test_abbruch_mitten_im_stream_ist_sauber(self):
+        # Browser zu: Open WebUI schliesst den Generator. GeneratorExit darf nicht
+        # als "Fehler" weiterverarbeitet werden (sonst RuntimeError beim Schliessen).
+        async def lauf():
+            agen = self.pipe.pipe({"messages": [{"role": "user", "content": "Geld"}]})
+            erstes = await agen.__anext__()
+            await agen.aclose()
+            return erstes
+        self.assertEqual(asyncio.run(lauf()), "Ant")
+
+    def test_fehlerzeile_und_fusszeile_ohne_leerzeilen_nicht_im_verlauf(self):
+        verlauf = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "---\n*Abgerufen: S. 11 (0.500)*"},
+                   {"role": "user", "content": "b"}, {"role": "assistant", "content": "X\n\n**Fehler in der RAG-Pipe:** KonfigFehler: y"}]
+        self.frage("c", verlauf)
+        n = self.nachrichten()
+        self.assertEqual([m["content"] for m in n[1:5]], ["a", "", "b", "X"])
 
     def test_leere_frage(self):
         self.assertEqual("".join(sammle(self.pipe.pipe({"messages": []}))), "Keine Frage gefunden.")
@@ -334,6 +401,13 @@ class TestHelfer(unittest.TestCase):
         frage, verlauf = op.zerlege_verlauf(msgs)
         self.assertEqual(frage, "c")
         self.assertEqual(verlauf, [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}])
+
+    def test_defaults_sind_die_gemessene_konfiguration(self):
+        # README, Tabelle "Gemessen mit dem reparierten Stand": 400, top_k=4, flavor,meta
+        v = op.Pipe.Valves()
+        self.assertEqual((v.CHUNK_SIZE, v.CHUNK_OVERLAP, v.TOP_K, v.DROP_TYPES, v.EMBED_MODEL, v.LLM_MODEL, v.THINK),
+                         (400, 150, 4, "flavor,meta", "bge-m3", "qwen3:14b", False))
+        self.assertEqual((rag.CHUNK_OVERLAP, rag.EMBED_MODEL, rag.LLM_MODEL), (150, "bge-m3", "qwen3:14b"))
 
     def test_top_k_mindestens_eins(self):
         with self.assertRaises(Exception):

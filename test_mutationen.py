@@ -7,8 +7,7 @@ dass die Tests ueberhaupt etwas festhalten.
 
     python test_mutationen.py
 
-Jede Mutation wird eingespielt, test_classify.py und test_ingest_seite.py
-laufen, dann wird die Datei aus dem Speicher zurueckgeschrieben (finally).
+Jede Mutation wird eingespielt, die Tests aus TESTS laufen, dann wird die Datei aus dem Speicher zurueckgeschrieben (finally).
 Exit-Code 1, wenn eine Mutation gruen bleibt, deren Namen nicht mit "[gleich]"
 beginnt -- solche sind nachweislich verhaltensgleich, siehe M3.
 """
@@ -18,7 +17,7 @@ import subprocess
 import sys
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-TESTS = ("test_classify.py", "test_ingest_seite.py", "test_wertung.py")
+TESTS = ("test_classify.py", "test_ingest_seite.py", "test_wertung.py", "test_openwebui_pipe.py")
 
 # (Name, Datei, Suchmuster, Ersatz)
 MUTATIONEN = [
@@ -125,6 +124,48 @@ MUTATIONEN = [
      "classify.py",
      "            print(f\"  [{e['typ']}] Modell sagte: {e['typ_antwort'][:70]!r}\")",
      "            print(f\"  [{e['typ']}]\")"),
+
+    # ---- Open-WebUI-Pipe (test_openwebui_pipe.py) ----
+    ("P1 Pipe baut den Prompt selbst statt ueber rag.baue_nachrichten",
+     "openwebui_pipe.py", "        return rag.baue_nachrichten(frage, hits), hits",
+     '        return [{"role": "system", "content": rag.SYSTEM_PROMPT}, {"role": "user", "content": frage}], hits'),
+    ("P2 CLI baut den Prompt anders als die Pipe",
+     "rag.py", '"messages": baue_nachrichten(query, hits),', '"messages": [{"role": "user", "content": query}],'),
+    ("P3 CHUNK_SIZE-Valve wirkt nicht (Container-Umgebung schlaegt durch)",
+     "openwebui_pipe.py", "        rag.CHUNK_SIZE = v.CHUNK_SIZE\n", ""),
+    ("P4 RERANK nicht fest aus",
+     "openwebui_pipe.py", "        rag.RERANK = False  # braucht torch, das im Open-WebUI-Image fehlt\n", ""),
+    ("P5 EMBED_MODEL-Valve wirkt nicht",
+     "openwebui_pipe.py", "        rag.EMBED_MODEL = v.EMBED_MODEL\n", ""),
+    ("P6 Defaults weichen von der gemessenen Konfiguration ab",
+     "openwebui_pipe.py", 'CHUNK_SIZE: int = Field(400,', 'CHUNK_SIZE: int = Field(800,'),
+    ("P7 DROP_TYPES nicht im Index-Key",
+     "openwebui_pipe.py", "v.DROP_TYPES, v.EMBED_MODEL, v.OLLAMA_URL, v.CHUNK_SIZE", "v.EMBED_MODEL, v.OLLAMA_URL, v.CHUNK_SIZE"),
+    ("P8 Cache-Key nur mtime",
+     "openwebui_pipe.py", "return (st.st_mtime_ns, st.st_size, st.st_ino)", "return st.st_mtime_ns"),
+    ("P9 rag.py wird nie neu geladen",
+     "openwebui_pipe.py", "if key != self._rag_key:", "if self._rag is None:"),
+    ("P10 Retrieval blockiert den Event-Loop (kein to_thread)",
+     "openwebui_pipe.py", "await asyncio.to_thread(self._suche, frage, self.valves)", "self._suche(frage, self.valves)"),
+    ("P11 retrieve ausserhalb des Locks (Modell-Globale koennen wechseln)",
+     "openwebui_pipe.py", "            chunks, embs = self._lade_index(rag, v)\n            hits =",
+     "            chunks, embs = self._lade_index(rag, v)\n        hits ="),
+    ("P12 Fehler entkommen dem Chat",
+     "openwebui_pipe.py", "        except Exception as e:\n            yield f", "        except ZeroDivisionError as e:\n            yield f"),
+    ("P13 auch GeneratorExit wird als Fehler abgefangen",
+     "openwebui_pipe.py", "        except Exception as e:\n            yield f", "        except BaseException as e:\n            yield f"),
+    ("P14 Fusszeile geht in den Verlauf",
+     "openwebui_pipe.py", '"content": ohne_fusszeile(text_von(m.get("content")))', '"content": text_von(m.get("content"))'),
+    ("P15 Task-Anfragen laufen ins Retrieval",
+     "openwebui_pipe.py", "        if task:", "        if task == 'title_generation':"),
+    ("P16 Ollama-Fehlergrund geht verloren",
+     "openwebui_pipe.py", 'raise RuntimeError(f"Ollama antwortet {r.status_code}: {grund}")', 'raise RuntimeError(f"Ollama antwortet {r.status_code}")'),
+    ("P17 LLM-Valves wirken nicht",
+     "openwebui_pipe.py", '"model": v.LLM_MODEL, "messages": nachrichten, "think": v.THINK', '"model": "qwen3:14b", "messages": nachrichten, "think": False'),
+    # _lade_rag setzt beim Neuladen _index_key=None -> der Index wird ohnehin neu
+    # gebaut; der rag-Key im Index-Key ist Absicherung, kein zusaetzliches Verhalten.
+    ("[gleich] P18 rag-Key nicht im Index-Key",
+     "openwebui_pipe.py", "key = (self._rag_key, v.KNOWLEDGE_PATH", "key = (v.KNOWLEDGE_PATH"),
 ]
 
 

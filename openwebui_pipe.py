@@ -18,12 +18,18 @@ import asyncio
 import importlib.util
 import json
 import os
+import re
 import threading
 
 import httpx
 from pydantic import BaseModel, Field
 
 FUSSZEILE_START = "\n\n---\n*Abgerufen: "
+# Am Antwortende verankert -- Nutzertext, der so aussieht, bleibt unangetastet.
+# Das fuehrende "\n\n" ist optional: Open WebUI strippt den letzten Textteil, bei
+# leerer Modellantwort steht die Fusszeile dann ohne Leerzeilen da.
+_FUSSZEILE = re.compile(r"(?:\n\n)?---\n\*Abgerufen: [^\n]*\*\s*\Z")
+_FEHLERZEILE = re.compile(r"(?:\n\n)?\*\*Fehler in der RAG-Pipe:\*\*.*\Z", re.S)
 
 
 # ---------- reine Helfer (ohne Netz, testbar) ----------
@@ -35,14 +41,13 @@ def text_von(inhalt):
 
 
 def ohne_fusszeile(text):
-    """Die eigene Fundstellen-Zeile aus einer frueheren Antwort entfernen.
+    """Eigene Fundstellen- oder Fehlerzeile vom Ende einer frueheren Antwort entfernen.
 
-    Open WebUI speichert sie als Teil der Assistant-Antwort. Ginge sie im Verlauf
-    mit, saehe das Modell Seitenzahlen ohne deren Text -- der Systemprompt
+    Open WebUI speichert sie als Teil der Assistant-Antwort. Ginge die Fusszeile im
+    Verlauf mit, saehe das Modell Seitenzahlen ohne deren Text -- der Systemprompt
     verlangt aber, nur bereitgestellte Quellen zu zitieren.
     """
-    i = text.rfind(FUSSZEILE_START)
-    return text[:i] if i >= 0 else text
+    return _FEHLERZEILE.sub("", _FUSSZEILE.sub("", text))
 
 
 def zerlege_verlauf(messages):
@@ -151,14 +156,15 @@ class Pipe:
             self._index, self._index_key = (chunks, embs), key
         return self._index
 
-    def _suche(self, frage):
-        v = self.valves
-        # Der Lock schuetzt nur Laden und Index-Bau; die Suche selbst (ein Embedding
-        # der Frage) laeuft parallel.
+    def _suche(self, frage, v):
+        # Auch retrieve gehoert unter den Lock: es bettet die Frage mit den Modul-
+        # Globalen OLLAMA/EMBED_MODEL ein, die _lade_rag fuer die Valves DIESER
+        # Anfrage gesetzt hat. Ausserhalb koennte eine parallele Anfrage mit anderen
+        # Valves sie umsetzen -> Frage mit Modell B gegen Index aus Modell A.
         with self._lock:
             rag = self._lade_rag(v)
             chunks, embs = self._lade_index(rag, v)
-        hits = rag.retrieve(frage, chunks, embs, k=v.TOP_K)
+            hits = rag.retrieve(frage, chunks, embs, k=v.TOP_K)
         return rag.baue_nachrichten(frage, hits), hits
 
     async def _stream(self, nachrichten):
@@ -201,7 +207,7 @@ class Pipe:
         if not frage:
             yield "Keine Frage gefunden."
             return
-        nachrichten, hits = await asyncio.to_thread(self._suche, frage)
+        nachrichten, hits = await asyncio.to_thread(self._suche, frage, self.valves)
         async for stueck in self._stream(setze_verlauf_ein(nachrichten, verlauf)):
             yield stueck
         yield fundstellen(hits)
