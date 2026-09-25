@@ -232,14 +232,23 @@ def retrieve(query, chunks, embs, k=TOP_K):
 
 
 # ---------- Antwort vom LLM ----------
-def answer(query, hits):
+def baue_nachrichten(query, hits):
+    """Systemprompt + Quellen + Frage -- die eine Stelle, an der der Prompt entsteht.
+
+    Die CLI (answer) und die Open-WebUI-Pipe (openwebui_pipe.py) bauen ihn beide
+    hier, damit das Golden Set auch das misst, was im Chat ankommt.
+    """
     kontext = "\n\n".join(f"[{h['doc']}, Seite {h['seite']}]\n{h['text']}" for h, _ in hits)
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": f"Quellen:\n{kontext}\n\nFrage: {query}"},
+    ]
+
+
+def answer(query, hits):
     r = requests.post(f"{OLLAMA}/api/chat", json={
         "model": LLM_MODEL,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Quellen:\n{kontext}\n\nFrage: {query}"},
-        ],
+        "messages": baue_nachrichten(query, hits),
         "think": THINK,
         "stream": False,
     }, timeout=600)
