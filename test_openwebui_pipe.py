@@ -5,14 +5,16 @@ Tests der Open-WebUI-Pipe -- laeuft OHNE Ollama und ohne Open WebUI.
     python test_openwebui_pipe.py     # oder: python -m unittest test_openwebui_pipe -v
 
 Braucht pydantic und httpx (beide stecken im Open-WebUI-Image). Das Netz wird
-ersetzt: Embeddings kommen aus einer festen Tabelle, das LLM aus einem Stub, der
-mitschreibt, was es bekommen haette.
+ersetzt: Embeddings kommen aus einer festen Tabelle (requests.post gepatcht), das
+LLM aus einem httpx.MockTransport, der mitschreibt, was Ollama bekommen haette.
 
-Kern ist test_pipe_ruft_dieselbe_retrieval_wie_die_cli: die Pipe muss dieselben
-Chunks in denselben Prompt legen wie rag.py selbst.
+Kern ist test_pipe_ruft_dieselbe_retrieval_wie_die_cli: die Pipe muss mit
+denselben Stellschrauben dieselben Chunks in denselben Prompt legen wie rag.py.
 """
-import asyncio, json, os, sys, tempfile, unittest
+import asyncio, json, os, shutil, sys, tempfile, threading, time, unittest
 from unittest import mock
+
+import httpx
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
@@ -50,7 +52,7 @@ def fake_post(url, json=None, timeout=None):
 
 WISSEN = [
     {"id": 1, "seite": 2, "typ": "flavor", "text": "Werbung Werbung Geld! Das beste Spiel."},
-    {"id": 2, "seite": 11, "typ": "regel", "text": "Geld verdient man in Phase 5. Geld Geld."},
+    {"id": 2, "seite": 11, "typ": "regel", "text": "Geld verdient man in Phase 5. Geld Geld. Danach folgt die Aufraeumphase mit allen Resten."},
     {"id": 3, "seite": 6, "typ": "regel", "text": "Die Kette wird am Anfang gebaut."},
     {"id": 4, "seite": 14, "typ": "regel", "text": "Geld aus der Bank, Kette zahlt."},
     {"id": 5, "seite": 9, "typ": "meta", "text": "Inhaltsverzeichnis"},
@@ -63,54 +65,126 @@ def sammle(agen):
     return asyncio.run(lauf())
 
 
+def ollama_ndjson(*teile):
+    return "".join(json.dumps({"message": {"content": t}, "done": False}) + "\n" for t in teile) + \
+        json.dumps({"done": True}) + "\n"
+
+
 class PipeTestBasis(unittest.TestCase):
+    """Echte Pipe, echtes _stream -- nur das Netz ist ersetzt."""
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.wissen = os.path.join(self.tmp.name, "knowledge.jsonl")
-        with open(self.wissen, "w") as f:
-            for c in WISSEN:
-                f.write(json.dumps(c) + "\n")
+        self.schreibe_wissen(WISSEN)
         self.post = mock.patch("requests.post", side_effect=fake_post)
         self.post_mock = self.post.start()
         self.pipe = op.Pipe()
-        self.pipe.valves = op.Pipe.Valves(RAG_DIR=BASE, KNOWLEDGE_PATH=self.wissen,
-                                          OLLAMA_URL="http://stub", TOP_K=2, DROP_TYPES="flavor")
+        self.pipe.valves = op.Pipe.Valves(RAG_DIR=BASE, KNOWLEDGE_PATH=self.wissen, OLLAMA_URL="http://stub",
+                                          TOP_K=2, DROP_TYPES="flavor", CHUNK_SIZE=400, CHUNK_OVERLAP=150)
+        # LLM: httpx.MockTransport statt Ollama
         self.llm_bekam = []
+        self.llm_antwort = lambda req: httpx.Response(200, text=ollama_ndjson("Ant", "wort"))
 
-        async def fake_stream(nachrichten):
-            self.llm_bekam.append(nachrichten)
-            for s in ("Ant", "wort"):
-                yield s
-        self.pipe._stream = fake_stream
+        def handler(req):
+            self.llm_bekam.append({"url": str(req.url), **json.loads(req.content)})
+            return self.llm_antwort(req)
+        echter_client = httpx.AsyncClient
+        self.client = mock.patch.object(op.httpx, "AsyncClient",
+                                        lambda **kw: echter_client(transport=httpx.MockTransport(handler), **kw))
+        self.client.start()
 
     def tearDown(self):
+        self.client.stop()
         self.post.stop()
         self.tmp.cleanup()
 
-    def frage(self, text, verlauf=()):
+    def schreibe_wissen(self, eintraege):
+        with open(self.wissen, "w") as f:
+            for c in eintraege:
+                f.write(json.dumps(c) + "\n")
+
+    def frage(self, text, verlauf=(), task=None):
         body = {"messages": list(verlauf) + [{"role": "user", "content": text}]}
-        return "".join(sammle(self.pipe.pipe(body)))
+        return "".join(sammle(self.pipe.pipe(body, __task__=task)))
 
     def embed_aufrufe(self):
         return [c for c in self.post_mock.call_args_list if c.args[0].endswith("/api/embed")]
 
+    def index_bauten(self):
+        # Index-Bau = Embedding mit mehr als einem Text; eine Frage ist genau einer.
+        return [c for c in self.embed_aufrufe() if len(c.kwargs["json"]["input"]) > 1]
 
-class TestPipe(PipeTestBasis):
+    def nachrichten(self, i=0):
+        return self.llm_bekam[i]["messages"]
+
+
+class TestAequivalenzZurCli(PipeTestBasis):
     def test_pipe_ruft_dieselbe_retrieval_wie_die_cli(self):
+        # Kleine Chunks, damit das Chunking wirklich etwas zerlegt und falsche
+        # CHUNK_SIZE/OVERLAP-Uebernahme auffaellt.
+        self.pipe.valves.CHUNK_SIZE, self.pipe.valves.CHUNK_OVERLAP = 30, 10
         frage = "Wie verdiene ich Geld?"
         text = self.frage(frage)
 
-        # Referenz: CLI-Weg mit derselben Konfiguration (SOURCE=knowledge, DROP_TYPES=flavor)
+        # Referenz: CLI-Weg (rag.build_index) mit denselben Stellschrauben
         with mock.patch.dict(os.environ, {"SOURCE": "knowledge", "DROP_TYPES": "flavor"}), \
-             mock.patch.object(rag, "OLLAMA", "http://stub"), \
+             mock.patch.multiple(rag, OLLAMA="http://stub", CHUNK_SIZE=30, CHUNK_OVERLAP=10), \
              mock.patch("os.path.dirname", return_value=self.tmp.name):
             chunks, embs = rag.build_index()
+        self.assertGreater(len(chunks), len(WISSEN))  # es wurde tatsaechlich zerteilt
         hits = rag.retrieve(frage, chunks, embs, k=2)
 
-        self.assertEqual(self.llm_bekam, [rag.baue_nachrichten(frage, hits)])
+        self.assertEqual(self.nachrichten(), rag.baue_nachrichten(frage, hits))
         erwartet = ", ".join(f"S. {h['seite']} ({s:.3f})" for h, s in hits)
-        self.assertTrue(text.startswith("Antwort"))
+        self.assertTrue(text.startswith("Antwort"), text)
         self.assertTrue(text.endswith(f"*Abgerufen: {erwartet}*"), text)
+
+    def test_chunking_folgt_valves_nicht_der_container_umgebung(self):
+        # Open WebUI benutzt CHUNK_SIZE/CHUNK_OVERLAP selbst -- das darf nicht durchschlagen.
+        with mock.patch.dict(os.environ, {"CHUNK_SIZE": "1000", "CHUNK_OVERLAP": "100", "RERANK": "1"}):
+            self.pipe.valves.CHUNK_SIZE, self.pipe.valves.CHUNK_OVERLAP = 30, 10
+            self.frage("Geld")
+        n_index = len(self.index_bauten()[0].kwargs["json"]["input"])
+        erwartet = sum(len(rag.zerteile(c["text"], 30, 10)) for c in WISSEN if c["typ"] != "flavor")
+        self.assertEqual(n_index, erwartet)
+
+
+class TestValvesUndCache(PipeTestBasis):
+    def test_embedding_nutzt_valves(self):
+        self.pipe.valves.OLLAMA_URL, self.pipe.valves.EMBED_MODEL = "http://anderswo:1", "mein-embed"
+        self.frage("Geld")
+        for c in self.embed_aufrufe():
+            self.assertEqual(c.args[0], "http://anderswo:1/api/embed")
+            self.assertEqual(c.kwargs["json"]["model"], "mein-embed")
+
+    def test_llm_nutzt_valves(self):
+        self.pipe.valves.LLM_MODEL, self.pipe.valves.THINK = "mein-llm", True
+        self.frage("Geld")
+        b = self.llm_bekam[0]
+        self.assertEqual(b["url"], "http://stub/api/chat")
+        self.assertEqual((b["model"], b["think"], b["stream"]), ("mein-llm", True, True))
+
+    def test_index_wird_einmal_gebaut(self):
+        self.frage("Geld")
+        self.frage("Kette")
+        self.assertEqual(len(self.index_bauten()), 1)
+        self.assertEqual(len(self.embed_aufrufe()), 3)  # 1x Index + 2x Frage
+
+    def test_index_neu_bei_jeder_index_stellschraube(self):
+        self.frage("Geld")
+        for feld, wert in (("DROP_TYPES", "meta"), ("EMBED_MODEL", "x"), ("OLLAMA_URL", "http://y"),
+                           ("CHUNK_OVERLAP", 20), ("CHUNK_SIZE", 50)):
+            vorher = len(self.index_bauten())
+            setattr(self.pipe.valves, feld, wert)
+            self.frage("Geld")
+            self.assertEqual(len(self.index_bauten()), vorher + 1, feld)
+
+    def test_kein_neubau_bei_antwort_stellschrauben(self):
+        self.frage("Geld")
+        self.pipe.valves.TOP_K, self.pipe.valves.LLM_MODEL, self.pipe.valves.THINK = 3, "z", True
+        self.frage("Geld")
+        self.assertEqual(len(self.index_bauten()), 1)
 
     def test_drop_types_wirkt(self):
         # Die Werbeseite 2 traegt "geld" auch -- sie darf trotzdem nie abgerufen werden.
@@ -120,51 +194,126 @@ class TestPipe(PipeTestBasis):
         self.assertIn("S. 11 ", text)
 
     def test_drop_types_leer_nimmt_flavor_auf(self):
-        # Gegenprobe zu test_drop_types_wirkt: ohne Filter taucht Seite 2 auf.
-        self.pipe.valves.TOP_K = 10
-        self.pipe.valves.DROP_TYPES = ""
+        self.pipe.valves.TOP_K, self.pipe.valves.DROP_TYPES = 10, ""
         self.assertIn("S. 2 ", self.frage("Geld"))
-
-    def test_unbekannter_drop_type_bricht_ab(self):
-        self.pipe.valves.DROP_TYPES = "fakt"
-        # Die Pipe laedt rag.py als eigenes Modul -> eigene KonfigFehler-Klasse.
-        with self.assertRaisesRegex(Exception, "unbekannte Werte: fakt") as cm:
-            self.frage("Geld")
-        self.assertEqual(type(cm.exception).__name__, "KonfigFehler")
-
-    def test_index_wird_einmal_gebaut(self):
-        self.frage("Geld")
-        self.frage("Kette")
-        # 1x Index + 2x Frage
-        self.assertEqual(len(self.embed_aufrufe()), 3)
 
     def test_neue_wissensbasis_baut_index_neu(self):
         self.frage("Geld")
-        with open(self.wissen, "a") as f:
-            f.write(json.dumps({"id": 6, "seite": 15, "typ": "regel", "text": "Kette Kette Kette"}) + "\n")
-        os.utime(self.wissen, (1, 1))  # mtime sicher aendern
+        self.schreibe_wissen(WISSEN + [{"id": 6, "seite": 15, "typ": "regel", "text": "Kette Kette Kette"}])
         self.assertIn("S. 15 ", self.frage("Kette"))
 
+    def test_neuer_inhalt_mit_alter_mtime_baut_index_neu(self):
+        self.frage("Geld")
+        alt = os.stat(self.wissen).st_mtime_ns
+        self.schreibe_wissen(WISSEN + [{"id": 6, "seite": 42, "typ": "regel", "text": "Kette Kette Kette"}])
+        os.utime(self.wissen, ns=(alt, alt))  # wie cp -p / Restore
+        self.assertIn("S. 42 ", self.frage("Kette"))
+
+    def test_geaenderte_rag_py_wird_neu_geladen(self):
+        rag_dir = os.path.join(self.tmp.name, "code")
+        os.mkdir(rag_dir)
+        shutil.copy(os.path.join(BASE, "rag.py"), rag_dir)
+        self.pipe.valves.RAG_DIR = rag_dir
+        self.frage("Geld")
+        pfad = os.path.join(rag_dir, "rag.py")
+        with open(pfad) as f:
+            quelle = f.read()
+        with open(pfad, "w") as f:
+            f.write(quelle.replace("Du bist ein Regel-Assistent", "Du bist ein NEUER Regel-Assistent"))
+        self.frage("Geld")
+        self.assertTrue(self.nachrichten(1)[0]["content"].startswith("Du bist ein NEUER Regel-Assistent"))
+        self.assertEqual(len(self.index_bauten()), 2)
+
+
+class TestVerlaufUndTask(PipeTestBasis):
     def test_verlauf_geht_mit_quellen_nur_an_letzter_frage(self):
         verlauf = [{"role": "user", "content": "Wie verdiene ich Geld?"},
                    {"role": "assistant", "content": "In Phase 5."}]
-        self.frage("Und die Kette?", verlauf)
-        n = self.llm_bekam[0]
+        # Open WebUI schickt Nachrichten mit Anhang als Liste von Teilen
+        roh = [{"role": "user", "content": [{"type": "text", "text": "Wie verdiene ich Geld?"}]}, verlauf[1]]
+        self.frage("Und die Kette?", roh)
+        n = self.nachrichten()
         self.assertEqual(n[0]["content"], rag.SYSTEM_PROMPT)
         self.assertEqual(n[1:3], verlauf)
         self.assertTrue(n[3]["content"].startswith("Quellen:"))
         self.assertTrue(n[3]["content"].endswith("Frage: Und die Kette?"))
         self.assertEqual(len(n), 4)
 
-    def test_task_ohne_retrieval(self):
-        body = {"messages": [{"role": "user", "content": "Erzeuge einen Titel"}]}
-        text = "".join(sammle(self.pipe.pipe(body, __task__="title_generation")))
+    def test_fusszeile_geht_nicht_in_den_verlauf(self):
+        erste = self.frage("Wie verdiene ich Geld?")
+        self.assertIn("*Abgerufen:", erste)
+        verlauf = [{"role": "user", "content": "Wie verdiene ich Geld?"}, {"role": "assistant", "content": erste}]
+        self.frage("Und die Kette?", verlauf)
+        self.assertEqual(self.nachrichten(1)[2], {"role": "assistant", "content": "Antwort"})
+
+    def test_task_ohne_retrieval_rollen_und_listen_erhalten(self):
+        msgs = [{"role": "system", "content": "Du erzeugst Titel."},
+                {"role": "user", "content": [{"type": "text", "text": "Erzeuge"}, {"type": "text", "text": "Titel"}]}]
+        text = "".join(sammle(self.pipe.pipe({"messages": msgs}, __task__="title_generation")))
         self.assertEqual(text, "Antwort")
         self.assertEqual(self.embed_aufrufe(), [])
-        self.assertEqual(self.llm_bekam, [[{"role": "user", "content": "Erzeuge einen Titel"}]])
+        self.assertEqual(self.nachrichten(), [{"role": "system", "content": "Du erzeugst Titel."},
+                                              {"role": "user", "content": "Erzeuge Titel"}])
 
     def test_leere_frage(self):
         self.assertEqual("".join(sammle(self.pipe.pipe({"messages": []}))), "Keine Frage gefunden.")
+
+
+class TestFehlerSichtbar(PipeTestBasis):
+    def test_konfigfehler_erscheint_im_chat(self):
+        self.pipe.valves.DROP_TYPES = "fakt"
+        text = self.frage("Geld")  # darf nicht werfen
+        self.assertIn("Fehler in der RAG-Pipe", text)
+        self.assertIn("KonfigFehler", text)
+        self.assertIn("unbekannte Werte: fakt", text)
+
+    def test_leerer_index_klar_gemeldet(self):
+        self.schreibe_wissen([c for c in WISSEN if c["typ"] == "flavor"])
+        self.assertIn("Index leer", self.frage("Geld"))
+
+    def test_ollama_http_fehler_nennt_grund(self):
+        self.llm_antwort = lambda req: httpx.Response(404, json={"error": "model 'qwen3:14b' not found"})
+        text = self.frage("Geld")
+        self.assertIn("404", text)
+        self.assertIn("model 'qwen3:14b' not found", text)
+
+    def test_ollama_fehler_mitten_im_stream(self):
+        self.llm_antwort = lambda req: httpx.Response(
+            200, text=json.dumps({"message": {"content": "Teil 1 "}}) + "\n" + json.dumps({"error": "runner terminated"}) + "\n")
+        text = self.frage("Geld")
+        self.assertTrue(text.startswith("Teil 1 "))
+        self.assertIn("runner terminated", text)
+        self.assertNotIn("*Abgerufen:", text)
+
+
+class TestEventLoop(PipeTestBasis):
+    def test_langsames_embedding_blockiert_den_event_loop_nicht(self):
+        def langsam(url, json=None, timeout=None):
+            time.sleep(0.3)
+            return fake_post(url, json=json, timeout=timeout)
+        self.post_mock.side_effect = langsam
+
+        async def lauf():
+            luecken, stop = [], asyncio.Event()
+
+            async def herzschlag():
+                t = time.monotonic()
+                while not stop.is_set():
+                    await asyncio.sleep(0.01)
+                    jetzt = time.monotonic()
+                    luecken.append(jetzt - t)
+                    t = jetzt
+            hb = asyncio.create_task(herzschlag())
+            body = {"messages": [{"role": "user", "content": "Geld"}]}
+            await asyncio.gather(*[self._sammle(body) for _ in range(2)])
+            stop.set()
+            await hb
+            return max(luecken)
+        # Blockierend waeren es >= 0,3 s (ein Embedding-Aufruf); frei bleibt es im Bereich von 10 ms.
+        self.assertLess(asyncio.run(lauf()), 0.15)
+
+    async def _sammle(self, body):
+        return [s async for s in self.pipe.pipe(body)]
 
 
 class TestHelfer(unittest.TestCase):
@@ -179,12 +328,16 @@ class TestHelfer(unittest.TestCase):
                  {"type": "text", "text": "geht das?"}]
         self.assertEqual(op.text_von(teile), "Wie geht das?")
 
-    def test_zerlege_verlauf_nimmt_letzte_nutzernachricht(self):
+    def test_zerlege_verlauf_nimmt_letzte_nutzernachricht_ohne_system(self):
         msgs = [{"role": "system", "content": "sys"}, {"role": "user", "content": "a"},
                 {"role": "assistant", "content": "b"}, {"role": "user", "content": " c "}]
         frage, verlauf = op.zerlege_verlauf(msgs)
         self.assertEqual(frage, "c")
         self.assertEqual(verlauf, [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}])
+
+    def test_top_k_mindestens_eins(self):
+        with self.assertRaises(Exception):
+            op.Pipe.Valves(TOP_K=0)
 
     def test_ollama_zeile(self):
         self.assertEqual(op.ollama_zeile('{"message": {"content": "x"}}'), "x")

@@ -256,8 +256,9 @@ SOURCE=knowledge CHUNK_SIZE=400 RERANK=1 python rag.py eval
 ("Brettspiel-Regeln (RAG)"). Die Pipe enthaelt keine eigene Retrieval-Logik: sie
 laedt `rag.py` zur Laufzeit aus einem gemounteten Clone und baut den Prompt ueber
 `rag.baue_nachrichten` -- dieselbe Funktion, die `rag.py ask`/`eval` benutzen.
-Was das Golden Set misst, ist also das, was im Chat antwortet. Ein `git pull` im
-Clone wirkt ohne Neustart (die Pipe laedt `rag.py` neu, wenn sich die Datei aendert).
+Mit denselben Werten fuer `CHUNK_SIZE`, `CHUNK_OVERLAP`, `DROP_TYPES` und `TOP_K` misst
+`rag.py eval` also das, was im Chat antwortet. Ein `git pull` im Clone wirkt ohne
+Neustart (die Pipe laedt `rag.py` neu, wenn sich die Datei aendert).
 
 Unterschiede zur CLI, bewusst:
 
@@ -265,6 +266,10 @@ Unterschiede zur CLI, bewusst:
 - kein Reranker (der braucht torch, das im Open-WebUI-Image fehlt)
 - Rueckfragen im Chat: Retrieval laeuft auf der letzten Frage, der Verlauf geht ohne alte Quellen mit
 - Open-WebUI-Hilfsaufgaben (Titel, Tags) gehen ohne Retrieval direkt ans Modell
+- ein Systemprompt aus Modell- oder Nutzereinstellungen wird verworfen; es gilt allein der aus `rag.py`
+- Fehler (z.B. `KonfigFehler`) erscheinen als Text im Chat, statt im Log zu verschwinden
+- Chunking kommt aus den Valves, nie aus der Container-Umgebung -- Open WebUI benutzt
+  `CHUNK_SIZE`/`CHUNK_OVERLAP` fuer seine eigene Dokumentsuche
 
 **Einrichtung** (Podman-Quadlet, Pfade anpassen; `z` wegen SELinux):
 
@@ -279,9 +284,16 @@ systemctl --user daemon-reload && systemctl --user restart open-webui.service
 OPENWEBUI_URL=http://localhost:8080 OPENWEBUI_KEY=sk-... python install_openwebui_pipe.py
 ```
 
-Die Stellschrauben (`TOP_K`, `DROP_TYPES`, `LLM_MODEL`, `EMBED_MODEL`, `THINK`, Pfade,
-`OLLAMA_URL` aus Sicht des Containers) stehen als *Valves* unter Admin → Funktionen.
-Default ist `DROP_TYPES=flavor`, wie bei der gemessenen Konfiguration.
+Die Stellschrauben (`CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOP_K`, `DROP_TYPES`, `LLM_MODEL`,
+`EMBED_MODEL`, `THINK`, Pfade, `OLLAMA_URL` aus Sicht des Containers) stehen als *Valves*
+unter Admin → Funktionen. Die Defaults sind die oben gemessene Konfiguration:
+`CHUNK_SIZE=400`, `CHUNK_OVERLAP=150`, `TOP_K=4`, `DROP_TYPES=flavor,meta`. Der passende
+Vergleichslauf: `SOURCE=knowledge CHUNK_SIZE=400 DROP_TYPES=flavor,meta python rag.py eval`.
+
+`knowledge.jsonl` ist als einzelne Datei gemountet. Ein Bind-Mount haengt an der Inode:
+wird die Datei auf dem Host per Rename ersetzt (`mv`, rsync ohne `--inplace`), sieht der
+Container weiter die alte. Die Ingest-Skripte schreiben an Ort und Stelle und sind nicht
+betroffen; nach einem Rename-Ersatz `systemctl --user restart open-webui.service`.
 
 ## Was man dabei lernt
 
