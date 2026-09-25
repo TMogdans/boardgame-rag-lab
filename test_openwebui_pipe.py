@@ -383,6 +383,73 @@ class TestEventLoop(PipeTestBasis):
         return [s async for s in self.pipe.pipe(body)]
 
 
+class TestRegelfrageFeld(PipeTestBasis):
+    """Das optionale Feld "regelfrage" fuer Home Assistant."""
+
+    def frage_rf(self, text, **rf):
+        body = {"messages": [{"role": "user", "content": text}], "regelfrage": rf}
+        return "".join(sammle(self.pipe.pipe(body)))
+
+    def test_bekanntes_spiel_antwortet_wie_ohne_feld(self):
+        mit = self.frage_rf("Geld", spiel="Food Chain Magnate")
+        ohne = self.frage("Geld")
+        self.assertEqual(mit, ohne)
+        self.assertEqual(self.nachrichten(0), self.nachrichten(1))
+
+    def test_alias_und_hoerfehler_treffen(self):
+        for spiel in ("FCM", "food chain", "Food Chain Magnet"):
+            self.assertIn("*Abgerufen:", self.frage_rf("Geld", spiel=spiel), spiel)
+
+    def test_unbekanntes_spiel_ohne_suche(self):
+        text = self.frage_rf("Geld", spiel="Terraforming Mars")
+        self.assertIn("Zu „Terraforming Mars“ habe ich kein Regelheft", text)
+        self.assertIn("Verfuegbar: Food Chain Magnate", text)
+        self.assertEqual(self.embed_aufrufe(), [])
+        self.assertEqual(self.llm_bekam, [])
+
+    def test_aehnliches_spiel_bekommt_vorschlag(self):
+        text = self.frage_rf("Geld", spiel="Fudschein Magnat")
+        self.assertIn("Meintest du Food Chain Magnate?", text)
+        self.assertEqual(self.embed_aufrufe(), [])
+
+    def test_sprache_ohne_fusszeile_gleicher_prompt(self):
+        text = self.frage_rf("Geld", spiel="FCM", sprache=True)
+        self.assertEqual(text, "Antwort")
+        self.frage("Geld")
+        self.assertEqual(self.nachrichten(0), self.nachrichten(1))  # Prompt identisch zur Chat-Variante
+
+    def test_spiel_aus_valves(self):
+        self.pipe.valves.SPIEL, self.pipe.valves.SPIEL_ALIASE = "Brass: Birmingham", "Brass"
+        self.assertIn("*Abgerufen:", self.frage_rf("Geld", spiel="brass birmingham"))
+        self.assertIn("kein Regelheft", self.frage_rf("Geld", spiel="Food Chain Magnate"))
+
+    def test_kaputtes_feld_wird_ignoriert(self):
+        body = {"messages": [{"role": "user", "content": "Geld"}], "regelfrage": "Food Chain"}
+        self.assertIn("*Abgerufen:", "".join(sammle(self.pipe.pipe(body))))
+
+
+class TestSpielzuordnung(unittest.TestCase):
+    K = op.katalog_aus("Food Chain Magnate", "Food Chain, FCM")
+
+    def test_treffer(self):
+        for q in ("Food Chain Magnate", "food-chain magnate", "FoodChain", "FCM", "Food Chain Magnet"):
+            self.assertEqual(op.ordne_spiel(q, self.K), ("treffer", "Food Chain Magnate"), q)
+
+    def test_normalisierung_traegt_bei_kurzen_namen(self):
+        # Bei kurzen Namen rettet die Unschaerfe nichts: "f.c.m." gegen "fcm" liegt
+        # ohne Normalisierung bei 0,67 -- erst das Entfernen der Satzzeichen trifft.
+        self.assertEqual(op.ordne_spiel("F.C.M.", self.K), ("treffer", "Food Chain Magnate"))
+        self.assertEqual(op.ordne_spiel("F C M", self.K), ("treffer", "Food Chain Magnate"))
+
+    def test_kein_treffer(self):
+        for q in ("Terraforming Mars", "Brass Birmingham", "", None, "Food"):
+            self.assertEqual(op.ordne_spiel(q, self.K)[0], "unbekannt", q)
+
+    def test_vorschlag_nur_bei_aehnlichkeit(self):
+        self.assertEqual(op.ordne_spiel("Fudschein Magnat", self.K), ("unbekannt", ["Food Chain Magnate"]))
+        self.assertEqual(op.ordne_spiel("Terraforming Mars", self.K), ("unbekannt", []))
+
+
 class TestHelfer(unittest.TestCase):
     def test_cli_answer_nutzt_baue_nachrichten(self):
         hits = [({"doc": "knowledge", "seite": 11, "text": "Geld in Phase 5"}, 0.9)]
