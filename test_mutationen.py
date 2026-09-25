@@ -166,6 +166,22 @@ MUTATIONEN = [
     # gebaut; der rag-Key im Index-Key ist Absicherung, kein zusaetzliches Verhalten.
     ("[gleich] P18 rag-Key nicht im Index-Key",
      "openwebui_pipe.py", "key = (self._rag_key, v.KNOWLEDGE_PATH", "key = (v.KNOWLEDGE_PATH"),
+    ("P19 unbekanntes Spiel wird trotzdem beantwortet",
+     "openwebui_pipe.py", '            if status != "treffer":', '            if False:'),
+    ("P20 Spielzuordnung ohne Unschaerfe (nur exakt)",
+     "openwebui_pipe.py", "    if bewertet and bewertet[0][0] >= schwelle:", "    if False:"),
+    ("P21 Schwelle so niedrig, dass fremde Spiele treffen",
+     "openwebui_pipe.py", "def ordne_spiel(anfrage, katalog, schwelle=0.8):", "def ordne_spiel(anfrage, katalog, schwelle=0.1):"),
+    ("P22 Normalisierung ignoriert Leerzeichen/Satzzeichen nicht",
+     "openwebui_pipe.py", 'return re.sub(r"[\\W_]+", "", (name or "").casefold())', 'return (name or "").casefold()'),
+    ("P23 Aliase aus den Valves werden ignoriert",
+     "openwebui_pipe.py", '    formen = [name] + [a for a in (aliase or "").split(",") if a.strip()]', '    formen = [name]'),
+    ("P24 Sprachmodus behaelt die Fusszeile",
+     "openwebui_pipe.py", '        if not rf.get("sprache"):\n            yield fundstellen(hits)', '        yield fundstellen(hits)'),
+    ("P25 Vorschlaege werden nicht genannt",
+     "openwebui_pipe.py", '    return "unbekannt", [k for r, k in bewertet if r >= 0.5]', '    return "unbekannt", []'),
+    ("P26 Katalog kommt nicht aus den Valves",
+     "openwebui_pipe.py", "ordne_spiel(rf[\"spiel\"], katalog_aus(v.SPIEL, v.SPIEL_ALIASE))", "ordne_spiel(rf[\"spiel\"], katalog_aus(\"Food Chain Magnate\", \"Food Chain, FCM\"))"),
 ]
 
 

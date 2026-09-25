@@ -1,7 +1,7 @@
 """
 title: Brettspiel-Regeln (RAG)
 description: Beantwortet Regelfragen aus knowledge.jsonl mit derselben Retrieval-Logik wie rag.py.
-version: 0.2.0
+version: 0.3.0
 
 Open-WebUI-Pipe: erscheint in der Modellauswahl als eigenes Modell. Die Logik
 (Chunking, Embedding, Retrieval, Prompt) kommt aus rag.py -- diese Datei laedt
@@ -15,6 +15,7 @@ Modell rechnet. Die requests-basierten rag.py-Funktionen laufen deshalb per
 asyncio.to_thread, die Antwort streamt ueber httpx.
 """
 import asyncio
+import difflib
 import importlib.util
 import json
 import os
@@ -91,6 +92,42 @@ def ollama_zeile(zeile):
     return (d.get("message") or {}).get("content", "")
 
 
+def normalisiere(name):
+    """Spielname fuer den Vergleich: klein, ohne Satzzeichen und Leerraum.
+
+    "Brass: Birmingham" und "brass birmingham" sollen gleich aussehen; Whisper
+    und Haiku liefern Titel in wechselnder Schreibweise.
+    """
+    return re.sub(r"[\W_]+", "", (name or "").casefold())
+
+
+def katalog_aus(name, aliase):
+    """{kanonischer Name: [normalisierte Schreibweisen]} aus den Valves."""
+    formen = [name] + [a for a in (aliase or "").split(",") if a.strip()]
+    return {name: sorted({normalisiere(f) for f in formen if normalisiere(f)})}
+
+
+def ordne_spiel(anfrage, katalog, schwelle=0.8):
+    """("treffer", Name) oder ("unbekannt", [Vorschlaege]).
+
+    Exakt nach Normalisierung, sonst unscharf (difflib) gegen jede Schreibweise --
+    fuer Hoerfehler wie "Food Chain Magnet". Unterhalb der Schwelle kein Treffer:
+    lieber "kein Regelheft" als die Regeln des falschen Spiels.
+    """
+    n = normalisiere(anfrage)
+    if not n:
+        return "unbekannt", []
+    bewertet = []
+    for kanon, formen in katalog.items():
+        if n in formen:
+            return "treffer", kanon
+        bewertet.append((max(difflib.SequenceMatcher(None, n, f).ratio() for f in formen), kanon))
+    bewertet.sort(reverse=True)
+    if bewertet and bewertet[0][0] >= schwelle:
+        return "treffer", bewertet[0][1]
+    return "unbekannt", [k for r, k in bewertet if r >= 0.5]
+
+
 def datei_stand(pfad):
     """Aenderungsmerkmal einer Datei. mtime allein reicht nicht: `cp -p` oder ein
     Restore schreiben neuen Inhalt mit alter mtime."""
@@ -112,6 +149,10 @@ class Pipe:
         TOP_K: int = Field(4, ge=1)
         DROP_TYPES: str = Field("flavor,meta", description="Chunk-Typen, die nicht in den Index gehen (regel, flavor, meta)")
         THINK: bool = False
+        # Welches Spiel knowledge.jsonl beschreibt -- fuer Anfragen mit "regelfrage.spiel"
+        # (Home Assistant). Solange es eine Wissensbasis gibt, ist das ein Eintrag.
+        SPIEL: str = "Food Chain Magnate"
+        SPIEL_ALIASE: str = Field("Food Chain, FCM", description="Kurzformen, kommagetrennt")
 
     def __init__(self):
         self.valves = self.Valves()
@@ -203,6 +244,18 @@ class Pipe:
                                               for m in messages]):
                 yield stueck
             return
+        # Optionales Feld fuer Aufrufer wie Home Assistant:
+        #   "regelfrage": {"spiel": "Food Chain Magnate", "sprache": true}
+        # Ohne das Feld (Chat in Open WebUI) aendert sich nichts.
+        rf = body.get("regelfrage") if isinstance(body.get("regelfrage"), dict) else {}
+        if rf.get("spiel") is not None:
+            v = self.valves
+            status, ergebnis = ordne_spiel(rf["spiel"], katalog_aus(v.SPIEL, v.SPIEL_ALIASE))
+            if status != "treffer":
+                vorschlag = f" Meintest du {' oder '.join(ergebnis)}?" if ergebnis else ""
+                yield (f"Zu „{rf['spiel']}“ habe ich kein Regelheft.{vorschlag} "
+                       f"Verfuegbar: {v.SPIEL}.")
+                return
         frage, verlauf = zerlege_verlauf(messages)
         if not frage:
             yield "Keine Frage gefunden."
@@ -210,4 +263,7 @@ class Pipe:
         nachrichten, hits = await asyncio.to_thread(self._suche, frage, self.valves)
         async for stueck in self._stream(setze_verlauf_ein(nachrichten, verlauf)):
             yield stueck
-        yield fundstellen(hits)
+        # Fuer Sprache keine Fusszeile -- Scores wuerden sonst vorgelesen. Der Prompt
+        # bleibt derselbe wie bei der CLI, damit das Golden Set weiter gilt.
+        if not rf.get("sprache"):
+            yield fundstellen(hits)

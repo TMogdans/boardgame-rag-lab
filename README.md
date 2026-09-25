@@ -204,7 +204,7 @@ python test_classify.py      # Klassifikator-Auswertung, 17 Antwortvarianten
 python test_ingest_seite.py  # 'seite'-Feld in ingest.py und vision_ingest.py
 python test_mutationen.py    # Mutationsprobe: verfaelscht die Fixes und prueft, dass Tests rot werden
 python test_openwebui_pipe.py  # Pipe: gleiche Chunks, gleicher Prompt wie die CLI (braucht pydantic + httpx)
-# test_mutationen.py faehrt auch die Pipe-Mutationen (P1-P18)
+# test_mutationen.py faehrt auch die Pipe-Mutationen (P1-P26)
 ```
 
 ### Ingestion nach Inhaltstyp
@@ -284,6 +284,22 @@ Volume=/var/home/USER/rag-lab/knowledge.jsonl:/rag/data/knowledge.jsonl:ro,z
 systemctl --user daemon-reload && systemctl --user restart open-webui.service
 OPENWEBUI_URL=http://localhost:8080 OPENWEBUI_KEY=sk-... python install_openwebui_pipe.py
 ```
+
+**Aufruf von aussen (z.B. Home Assistant):** ueber Open WebUIs OpenAI-kompatible API
+(`POST /api/chat/completions`, `model: brettspiel_rag`) mit einem optionalen Feld:
+
+```json
+{"model": "brettspiel_rag", "stream": false,
+ "messages": [{"role": "user", "content": "Welche Reichweite hat der Truck Driver?"}],
+ "regelfrage": {"spiel": "Food Chain Magnate", "sprache": true}}
+```
+
+- `spiel` wird unscharf gegen die Valves `SPIEL`/`SPIEL_ALIASE` zugeordnet (Gross/Klein,
+  Satzzeichen, Hoerfehler wie "Food Chain Magnet"). Ohne Treffer antwortet die Pipe
+  "Zu „…“ habe ich kein Regelheft", ggf. mit Vorschlag -- ohne Suche und ohne LLM-Aufruf.
+- `sprache: true` laesst nur die Fundstellen-Fusszeile weg. Der Prompt bleibt derselbe wie
+  bei der CLI, damit das Golden Set weiter misst, was gesprochen wird.
+- Ohne das Feld (Chat in Open WebUI) aendert sich nichts.
 
 Die Stellschrauben (`CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOP_K`, `DROP_TYPES`, `LLM_MODEL`,
 `EMBED_MODEL`, `THINK`, Pfade, `OLLAMA_URL` aus Sicht des Containers) stehen als *Valves*
