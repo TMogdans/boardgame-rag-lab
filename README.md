@@ -44,6 +44,8 @@ sind weiter unten beschrieben.
 | `auto_ingest.py` | **Auto-Router:** entscheidet pro Seite selbst zwischen Text/Tabelle/Vision (Docling-Layout + Fragment-Heuristik) -> `knowledge.jsonl`. |
 | `classify.py` | Taggt jeden Chunk als `regel`/`flavor`/`meta`, damit sich Ballast beim Retrieval ausfiltern laesst. |
 | `inspect_layout.py` | Zeigt die Docling-Region-Labels pro Seite (zum Debuggen und Verstehen des Routings). |
+| `openwebui_pipe.py` | Open-WebUI-Pipe: dieselbe Retrieval-Logik als Modell in der Chat-Oberflaeche (siehe "Open WebUI"). |
+| `install_openwebui_pipe.py` | Laedt die Pipe per API in Open WebUI (anlegen oder aktualisieren). |
 | `golden_set.example.json` | Beispiel-Testset (Food Chain Magnate). Kopiere es nach `golden_set.json` und passe es an dein Spiel an. |
 
 ## Voraussetzungen
@@ -201,6 +203,7 @@ python test_wertung.py       # Dreiteilung, DROP_TYPES-Entkopplung, Keywords, Gu
 python test_classify.py      # Klassifikator-Auswertung, 17 Antwortvarianten
 python test_ingest_seite.py  # 'seite'-Feld in ingest.py und vision_ingest.py
 python test_mutationen.py    # Mutationsprobe: verfaelscht die Fixes und prueft, dass Tests rot werden
+python test_openwebui_pipe.py  # Pipe: gleiche Chunks, gleicher Prompt wie die CLI (braucht pydantic + httpx)
 ```
 
 ### Ingestion nach Inhaltstyp
@@ -246,6 +249,39 @@ python vision_ingest.py seite_6.png                       # jede Karte als Chunk
                                                           # bei anderem Namen: SEITE=6 davorsetzen
 SOURCE=knowledge CHUNK_SIZE=400 RERANK=1 python rag.py eval
 ```
+
+## Open WebUI
+
+`openwebui_pipe.py` macht die Pipeline in Open WebUI als eigenes Modell waehlbar
+("Brettspiel-Regeln (RAG)"). Die Pipe enthaelt keine eigene Retrieval-Logik: sie
+laedt `rag.py` zur Laufzeit aus einem gemounteten Clone und baut den Prompt ueber
+`rag.baue_nachrichten` -- dieselbe Funktion, die `rag.py ask`/`eval` benutzen.
+Was das Golden Set misst, ist also das, was im Chat antwortet. Ein `git pull` im
+Clone wirkt ohne Neustart (die Pipe laedt `rag.py` neu, wenn sich die Datei aendert).
+
+Unterschiede zur CLI, bewusst:
+
+- nur `SOURCE=knowledge` (die Pipe liest `knowledge.jsonl`, keinen PDF-Ordner)
+- kein Reranker (der braucht torch, das im Open-WebUI-Image fehlt)
+- Rueckfragen im Chat: Retrieval laeuft auf der letzten Frage, der Verlauf geht ohne alte Quellen mit
+- Open-WebUI-Hilfsaufgaben (Titel, Tags) gehen ohne Retrieval direkt ans Modell
+
+**Einrichtung** (Podman-Quadlet, Pfade anpassen; `z` wegen SELinux):
+
+```ini
+# ~/.config/containers/systemd/open-webui.container, Abschnitt [Container]
+Volume=/var/home/USER/boardgame-rag-lab:/rag/code:ro,z
+Volume=/var/home/USER/rag-lab/knowledge.jsonl:/rag/data/knowledge.jsonl:ro,z
+```
+
+```bash
+systemctl --user daemon-reload && systemctl --user restart open-webui.service
+OPENWEBUI_URL=http://localhost:8080 OPENWEBUI_KEY=sk-... python install_openwebui_pipe.py
+```
+
+Die Stellschrauben (`TOP_K`, `DROP_TYPES`, `LLM_MODEL`, `EMBED_MODEL`, `THINK`, Pfade,
+`OLLAMA_URL` aus Sicht des Containers) stehen als *Valves* unter Admin → Funktionen.
+Default ist `DROP_TYPES=flavor`, wie bei der gemessenen Konfiguration.
 
 ## Was man dabei lernt
 
